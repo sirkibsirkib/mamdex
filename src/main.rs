@@ -12,50 +12,46 @@ type Var = u32;
 type Val = u32;
 
 #[derive(Debug, Clone, Default)]
-struct PartialState {
+pub struct PartialState {
     assignments: HashMap<Var, Val>,
 }
 
 #[derive(Debug, Clone)]
-struct Duty {
-    name: &'static str,
-    partial_state: PartialState,
+pub struct Duty {
+    pub name: &'static str,
+    pub partial_state: PartialState,
 }
 
 #[derive(Debug, Clone)]
-struct Action {
-    name: &'static str,
-    src_pstate: PartialState,
-    dst_pstate: PartialState,
+pub struct Action {
+    pub name: &'static str,
+    pub src_pstate: PartialState,
+    pub dst_pstate: PartialState,
 }
 
 #[derive(Debug, Clone)]
-struct Rule {
-    name: &'static str,
-    if_all: IndexSet<2>,
-    then_all: IndexSet<2>,
-    then_none: IndexSet<2>,
+pub struct Rule {
+    pub name: &'static str,
+    pub if_all: IndexSet<2>,
+    pub then_all: IndexSet<2>,
+    pub then_none: IndexSet<2>,
 }
 
 #[derive(Debug, Clone, Default)]
-struct Specification {
-    duties: Vec<Duty>,
-    drules: Vec<Rule>,
-    actions: Vec<Action>,
-    arules: Vec<Rule>,
+pub struct Specification {
+    pub duties: Vec<Duty>,
+    pub drules: Vec<Rule>,
+    pub actions: Vec<Action>,
+    pub arules: Vec<Rule>,
 }
+
+////////////////////
 
 #[derive(Debug, Clone)]
 enum PathNode {
     Start { start_state: PartialState },
     Next { prev: Arc<PathNode>, acts_indexes: IndexSet<2> },
 }
-
-/*
-an pair of actions is mutually inconsistent IFF either:
-- preconditions disagree
-- preconditions discgree
-*/
 
 #[derive(Debug)]
 struct NextStateStepIter<'a> {
@@ -98,11 +94,6 @@ impl PathNode {
             }
         }
         Ok(())
-    }
-    fn acts_satisfy_arule(acts_indexes: &IndexSet<2>, arule: &Rule) -> bool {
-        !arule.if_all.is_superset_of(acts_indexes)
-            || (arule.then_all.is_subset_of(acts_indexes)
-                && arule.then_none.is_disjoint_with(acts_indexes))
     }
     fn satisfies_duty(&self, spec: &Specification, duty: &Duty) -> Result<(), Var> {
         self.state_assigns_superset(spec, &duty.partial_state)
@@ -209,7 +200,7 @@ impl Specification {
         complete
     }
     /// does NOT deduplicate anything. Computes union of actions, duties, etc.
-    fn subsume(&mut self, other: &Self) {
+    pub fn subsume(&mut self, other: &Self) {
         self.duties.extend(other.duties.iter().cloned());
         self.actions.extend(other.actions.iter().cloned());
         self.arules.extend(other.arules.iter().cloned());
@@ -228,15 +219,30 @@ fn main() {
             },
         ],
         arules: vec![],
-        drules: vec![],
-        duties: vec![Duty {
-            name: "Var(0) == 3",
-            partial_state: PartialState {
-                assignments: hm! {
-                    0 => 3,
+        drules: vec![Rule {
+            name: "Duty 1 always FALSE",
+            if_all: Default::default(),
+            then_all: Default::default(),
+            then_none: [1].into_iter().collect(),
+        }],
+        duties: vec![
+            Duty {
+                name: "Var(0) == 3",
+                partial_state: PartialState {
+                    assignments: hm! {
+                        0 => 3,
+                    },
                 },
             },
-        }],
+            Duty {
+                name: "Var(99) == 99",
+                partial_state: PartialState {
+                    assignments: hm! {
+                        99 => 99
+                    },
+                },
+            },
+        ],
     };
     let start_state = PartialState { assignments: hm! { 0 => 0, 1 => 1} };
     let duty_index = 0;
