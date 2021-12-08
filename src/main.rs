@@ -1,5 +1,12 @@
 use chunked_index_set::{ChunkRead, IndexSet};
+use maplit::hashmap as hm;
 use std::{collections::HashMap, sync::Arc};
+
+macro_rules! zrintln {
+    ($($arg:tt)*) => ({
+        println!( $( $arg ) * );
+    })
+}
 
 type Var = u32;
 type Val = u32;
@@ -29,6 +36,8 @@ struct Rule {
     then_all: IndexSet<2>,
     then_none: IndexSet<2>,
 }
+
+#[derive(Debug, Clone, Default)]
 struct Specification {
     duties: Vec<Duty>,
     drules: Vec<Rule>,
@@ -36,15 +45,7 @@ struct Specification {
     arules: Vec<Rule>,
 }
 
-impl PartialState {
-    // Can be understood as "self" matches pattern of "other"
-    fn update(&mut self, other: &Self) {
-        for (&var, &val) in other.assignments.iter() {
-            self.assignments.insert(var, val);
-        }
-    }
-}
-
+#[derive(Debug, Clone)]
 enum PathNode {
     Start { start_state: PartialState },
     Next { prev: Arc<PathNode>, acts_indexes: IndexSet<2> },
@@ -56,6 +57,7 @@ an pair of actions is mutually inconsistent IFF either:
 - preconditions discgree
 */
 
+#[derive(Debug)]
 struct NextStateStepIter<'a> {
     prev: &'a Arc<PathNode>,
     spec: &'a Specification,
@@ -63,22 +65,6 @@ struct NextStateStepIter<'a> {
 }
 
 ///////////////////
-
-impl PartialState {
-    fn inconsistency_wrt(&self, other: &Self) -> Option<Var> {
-        if self.assignments.len() > other.assignments.len() {
-            other.inconsistency_wrt(self)
-        } else {
-            for (var, my_val) in self.assignments.iter() {
-                match other.assignments.get(var) {
-                    Some(other_val) if other_val != my_val => return Some(*var),
-                    _ => {}
-                }
-            }
-            None
-        }
-    }
-}
 
 impl PathNode {
     fn assignment(&self, spec: &Specification, var: Var) -> Option<Val> {
@@ -119,17 +105,22 @@ impl PathNode {
                 && (!arule.then_all.is_subset_of(acts_indexes)
                     || !arule.then_none.is_disjoint_with(acts_indexes))
             {
+                zrintln!("rule {:?} mismatch", arule);
                 return None;
             }
         }
         // 2: check that all action post conditions are consistent
         if !spec.postconditions_consistent(acts_indexes) {
+            zrintln!("postconditions_inconsistent");
             return None;
         }
         // 3: check that all action preconditions are OK
         for act_index in acts_indexes.iter() {
             let action = &spec.actions[act_index];
-            me.state_assigns_superset(spec, &action.dst_pstate).ok()?;
+            if let Err(var) = me.state_assigns_superset(spec, &action.src_pstate) {
+                zrintln!("preconds bad {:?}", var);
+                return None;
+            }
         }
         Some(Self::Next { prev: me.clone(), acts_indexes: acts_indexes.clone() })
     }
@@ -137,17 +128,19 @@ impl PathNode {
 
 impl<'a> NextStateStepIter<'a> {
     fn new(prev: &'a Arc<PathNode>, spec: &'a Specification) -> Self {
-        Self { prev, spec, next_subset_to_consider: (0..spec.actions.len()).collect() }
+        let me = Self { prev, spec, next_subset_to_consider: (0..spec.actions.len()).collect() };
+        zrintln!("next_subset_to_consider: {:?}", me.next_subset_to_consider);
+        me
     }
 }
 impl Iterator for NextStateStepIter<'_> {
     type Item = PathNode;
     fn next(&mut self) -> Option<PathNode> {
         loop {
+            zrintln!("consider {:#?}", self);
             if self.next_subset_to_consider.is_empty() {
                 return None;
             }
-            // try return this
             let next =
                 PathNode::try_create_next_step(self.prev, &self.next_subset_to_consider, self.spec);
             self.next_subset_to_consider.try_decrease_in_powerset_order();
@@ -177,6 +170,7 @@ impl Specification {
         let mut incomplete = vec![PathNode::Start { start_state }];
         let mut complete = vec![];
         while let Some(path) = incomplete.pop() {
+            zrintln!("next path {:?}", &path);
             if path.state_assigns_superset(self, &duty.partial_state).is_ok() {
                 complete.push(path)
             } else {
@@ -196,4 +190,29 @@ impl Specification {
     }
 }
 
-fn main() {}
+fn main() {
+    let s = Specification {
+        actions: vec![
+            // yass
+            Action {
+                name: "Var(0) := 3",
+                src_pstate: PartialState { assignments: hm! {} },
+                dst_pstate: PartialState { assignments: hm! { 0 => 3 } },
+            },
+        ],
+        arules: vec![],
+        drules: vec![],
+        duties: vec![Duty {
+            name: "Var(0) == 3",
+            partial_state: PartialState {
+                assignments: hm! {
+                    0 => 3,
+                },
+            },
+        }],
+    };
+    let start_state = PartialState { assignments: hm! { 0 => 0, 1 => 1} };
+    let duty_index = 0;
+    let r = s.paths_to_duty(start_state, duty_index);
+    zrintln!("r {:#?}", r);
+}
