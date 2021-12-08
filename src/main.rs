@@ -65,7 +65,12 @@ struct NextStateStepIter<'a> {
 }
 
 ///////////////////
-
+impl Rule {
+    fn satisfied_by(&self, indexes: &IndexSet<2>) -> bool {
+        !self.if_all.is_superset_of(indexes)
+            || (self.then_all.is_subset_of(indexes) && self.then_none.is_disjoint_with(indexes))
+    }
+}
 impl PathNode {
     fn assignment(&self, spec: &Specification, var: Var) -> Option<Val> {
         match self {
@@ -94,6 +99,25 @@ impl PathNode {
         }
         Ok(())
     }
+    fn acts_satisfy_arule(acts_indexes: &IndexSet<2>, arule: &Rule) -> bool {
+        !arule.if_all.is_superset_of(acts_indexes)
+            || (arule.then_all.is_subset_of(acts_indexes)
+                && arule.then_none.is_disjoint_with(acts_indexes))
+    }
+    fn satisfies_duty(&self, spec: &Specification, duty: &Duty) -> Result<(), Var> {
+        self.state_assigns_superset(spec, &duty.partial_state)
+    }
+    fn satisfies_drules(&self, spec: &Specification) -> bool {
+        let satisfied_duties = (0..spec.duties.len())
+            .filter(|&duty_index| self.satisfies_duty(spec, &spec.duties[duty_index]).is_ok())
+            .collect();
+        for drule in spec.drules.iter() {
+            if !drule.satisfied_by(&satisfied_duties) {
+                return false;
+            }
+        }
+        true
+    }
     fn try_create_next_step(
         me: &Arc<Self>,
         acts_indexes: &IndexSet<2>,
@@ -101,10 +125,7 @@ impl PathNode {
     ) -> Option<Self> {
         // 1: check that all action rules are OK
         for arule in spec.arules.iter() {
-            if arule.if_all.is_superset_of(acts_indexes)
-                && (!arule.then_all.is_subset_of(acts_indexes)
-                    || !arule.then_none.is_disjoint_with(acts_indexes))
-            {
+            if !arule.satisfied_by(acts_indexes) {
                 zrintln!("rule {:?} mismatch", arule);
                 return None;
             }
@@ -122,7 +143,13 @@ impl PathNode {
                 return None;
             }
         }
-        Some(Self::Next { prev: me.clone(), acts_indexes: acts_indexes.clone() })
+        // 4: check that destination state satisfies all duty rules
+        let new = Self::Next { prev: me.clone(), acts_indexes: acts_indexes.clone() };
+        if !new.satisfies_drules(spec) {
+            return None;
+        }
+        // ok!
+        Some(new)
     }
 }
 
