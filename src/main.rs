@@ -1,6 +1,8 @@
-use chunked_index_set::{ChunkRead, IndexSet};
+use chunked_index_set::ChunkRead;
 use maplit::hashmap as hm;
 use std::{collections::HashMap, sync::Arc};
+
+type IndexSet = chunked_index_set::IndexSet<1>;
 
 macro_rules! zrintln {
     ($($arg:tt)*) => ({
@@ -38,9 +40,9 @@ pub struct Action {
 #[derive(Debug, Clone)]
 pub struct Rule {
     pub name: &'static str,
-    pub if_all: IndexSet<2>,
-    pub then_all: IndexSet<2>,
-    pub then_none: IndexSet<2>,
+    pub if_all: IndexSet,
+    pub then_all: IndexSet,
+    pub then_none: IndexSet,
 }
 
 /// Collection of duties, duty rules, actions, action rules.
@@ -58,19 +60,19 @@ pub struct Specification {
 #[derive(Debug, Clone)]
 enum PathNode {
     Start { start_state: PartialState },
-    Next { prev: Arc<PathNode>, acts_indexes: IndexSet<2> },
+    Next { prev: Arc<PathNode>, acts_indexes: IndexSet },
 }
 
 #[derive(Debug)]
 struct NextStateStepIter<'a> {
     prev: &'a Arc<PathNode>,
     spec: &'a Specification,
-    next_subset_to_consider: IndexSet<2>,
+    next_subset_to_consider: IndexSet,
 }
 
 ///////////////////
 impl Rule {
-    fn satisfied_by(&self, indexes: &IndexSet<2>) -> bool {
+    fn satisfied_by(&self, indexes: &IndexSet) -> bool {
         !self.if_all.is_subset_of(indexes)
             || (self.then_all.is_subset_of(indexes) && self.then_none.is_disjoint_with(indexes))
     }
@@ -120,7 +122,7 @@ impl PathNode {
     }
     fn try_create_next_step(
         me: &Arc<Self>,
-        acts_indexes: &IndexSet<2>,
+        acts_indexes: &IndexSet,
         spec: &Specification,
     ) -> Option<Self> {
         // 1: check that all action rules are OK
@@ -180,7 +182,7 @@ impl Iterator for NextStateStepIter<'_> {
 }
 
 impl Specification {
-    fn postconditions_consistent(&self, action_indexes: &IndexSet<2>) -> bool {
+    fn postconditions_consistent(&self, action_indexes: &IndexSet) -> bool {
         let mut delta = PartialState::default();
         for action_index in action_indexes.iter() {
             let action = &self.actions[action_index];
