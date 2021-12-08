@@ -11,17 +11,21 @@ macro_rules! zrintln {
 type Var = u32;
 type Val = u32;
 
+/// Represents partial assignment of var to val, i.e., Var -> 0 | Val
 #[derive(Debug, Clone, Default)]
 pub struct PartialState {
     assignments: HashMap<Var, Val>,
 }
 
+/// Named predicate over states. Satisfied by all states whose assignments are a superset of these
 #[derive(Debug, Clone)]
 pub struct Duty {
     pub name: &'static str,
     pub partial_state: PartialState,
 }
 
+/// Named predicate over transitions, i.e., (PartialState,PartialState).
+/// Precondition is a predicate over the source and postcondition is a predicate over dest.
 #[derive(Debug, Clone)]
 pub struct Action {
     pub name: &'static str,
@@ -29,6 +33,8 @@ pub struct Action {
     pub dst_pstate: PartialState,
 }
 
+/// Named requirement constraining the permitted combinations of indices.
+/// Satisfied = (if_all is subset) -> (then_all is subset && then_none is disjoint).
 #[derive(Debug, Clone)]
 pub struct Rule {
     pub name: &'static str,
@@ -37,6 +43,7 @@ pub struct Rule {
     pub then_none: IndexSet<2>,
 }
 
+/// Collection of duties, duty rules, actions, action rules.
 #[derive(Debug, Clone, Default)]
 pub struct Specification {
     pub duties: Vec<Duty>,
@@ -47,6 +54,7 @@ pub struct Specification {
 
 ////////////////////
 
+///
 #[derive(Debug, Clone)]
 enum PathNode {
     Start { start_state: PartialState },
@@ -63,7 +71,7 @@ struct NextStateStepIter<'a> {
 ///////////////////
 impl Rule {
     fn satisfied_by(&self, indexes: &IndexSet<2>) -> bool {
-        !self.if_all.is_superset_of(indexes)
+        !self.if_all.is_subset_of(indexes)
             || (self.then_all.is_subset_of(indexes) && self.then_none.is_disjoint_with(indexes))
     }
 }
@@ -102,6 +110,7 @@ impl PathNode {
         let satisfied_duties = (0..spec.duties.len())
             .filter(|&duty_index| self.satisfies_duty(spec, &spec.duties[duty_index]).is_ok())
             .collect();
+        zrintln!("Satisfies duties {:?}", &satisfied_duties);
         for drule in spec.drules.iter() {
             if !drule.satisfied_by(&satisfied_duties) {
                 return false;
@@ -140,6 +149,7 @@ impl PathNode {
             return None;
         }
         // ok!
+        zrintln!("ACCEPTING {:#?}", &new);
         Some(new)
     }
 }
@@ -199,19 +209,29 @@ impl Specification {
         }
         complete
     }
-    /// does NOT deduplicate anything. Computes union of actions, duties, etc.
-    pub fn subsume(&mut self, other: &Self) {
-        self.duties.extend(other.duties.iter().cloned());
-        self.actions.extend(other.actions.iter().cloned());
-        self.arules.extend(other.arules.iter().cloned());
-        self.drules.extend(other.drules.iter().cloned());
+    /// Returns the composition of this specification with another, without mutating either.
+    /// Does NOT check for name collisions between contents; result is the union of respective contents.
+    pub fn compose(&self, other: &Self) -> Self {
+        fn f<T: Clone>(a: &Vec<T>, b: &Vec<T>) -> Vec<T> {
+            a.iter().chain(b.iter()).cloned().collect()
+        }
+        Self {
+            duties: f(&self.duties, &other.duties),
+            drules: f(&self.drules, &other.drules),
+            actions: f(&self.actions, &other.actions),
+            arules: f(&self.arules, &other.arules),
+        }
     }
 }
 
 fn main() {
     let s = Specification {
         actions: vec![
-            // yass
+            Action {
+                name: "Var(99) := 99",
+                src_pstate: PartialState { assignments: hm! {} },
+                dst_pstate: PartialState { assignments: hm! { 99 => 99 } },
+            },
             Action {
                 name: "Var(0) := 3",
                 src_pstate: PartialState { assignments: hm! {} },
