@@ -3,9 +3,14 @@
 version = 3
 
 [[package]]
+name = "chunked_index_set"
+version = "0.1.0"
+
+[[package]]
 name = "mamdex"
 version = "0.1.0"
 dependencies = [
+ "chunked_index_set",
  "maplit",
 ]
 

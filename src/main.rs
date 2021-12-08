@@ -1,156 +1,161 @@
-use core::ops::Not;
-use std::collections::HashMap;
+use core::hash::Hash;
+use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 
-use core::ops::BitAnd;
-use maplit::hashmap as hm;
+use chunked_index_set::{ChunkRead, IndexSet};
 
-struct MaskedRule {
-    if_all: usize,
-    then_all: usize,
-    then_none: usize,
+type Var = u32;
+type Val = u32;
+
+#[derive(Debug, Clone)]
+struct PartialState {
+    assignments: HashMap<Var, Val>,
 }
-#[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
-struct Var(u16);
 
-#[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
-struct Val(u16);
+#[derive(Debug, Clone)]
+struct Duty {
+    name: &'static str,
+    partial_state: PartialState,
+}
 
+#[derive(Debug, Clone)]
 struct Action {
-    pre_cond: HashMap<Var, Val>,
-    post_cond: HashMap<Var, Val>,
+    name: &'static str,
+    src_pstate: PartialState,
+    dst_pstate: PartialState,
 }
 
-#[derive(Debug)]
-struct State {
-    store: HashMap<Var, Val>,
+#[derive(Debug, Clone)]
+struct Rule {
+    name: &'static str,
+    if_all: IndexSet<2>,
+    then_all: IndexSet<2>,
+    then_none: IndexSet<2>,
 }
-
-struct Spec {
+struct Specification {
+    duties: Vec<Duty>,
+    drules: Vec<Rule>,
     actions: Vec<Action>,
-    masked_rules: Vec<MaskedRule>,
+    arules: Vec<Rule>,
 }
 
-trait Bmap: Into<bool> + Sized {
-    fn bmap<T>(self, t: T) -> Option<T> {
-        if self.into() {
-            Some(t)
+impl PartialState {
+    // Can be understood as "self" matches pattern of "other"
+    fn update(&mut self, other: &Self) {
+        for (&var, &val) in other.assignments.iter() {
+            self.assignments.insert(var, val);
+        }
+    }
+}
+
+enum PathNode {
+    Start { start_state: PartialState },
+    Next { prev: Arc<PathNode>, acts_indexes: IndexSet<2> },
+}
+
+/*
+an pair of actions is mutually inconsistent IFF either:
+- preconditions disagree
+- preconditions discgree
+
+*/
+
+struct NextStateStepIter<'a> {
+    prev: &'a Arc<PathNode>,
+    spec: &'a Specification,
+    next_subset_to_consider: IndexSet<2>,
+}
+
+///////////////////
+
+impl PartialState {
+    fn inconsistency_wrt(&self, other: &Self) -> Option<Var> {
+        if self.assignments.len() > other.assignments.len() {
+            other.inconsistency_wrt(self)
         } else {
+            for (var, my_val) in self.assignments.iter() {
+                match other.assignments.get(var) {
+                    Some(other_val) if other_val != my_val => return Some(*var),
+
+                    _ => {}
+                }
+            }
             None
         }
     }
 }
-impl Bmap for bool {}
-trait BitMask: Copy + PartialEq + Not<Output = Self> + BitAnd<Output = Self> {
-    const NULL: Self;
-    fn without(self, other: Self) -> Self {
-        self & !other
-    }
-    fn is_superset_of(self, other: Self) -> bool {
-        other.without(self) == Self::NULL
-    }
-    fn overlaps(self, other: Self) -> bool {
-        self & other != Self::NULL
-    }
-    fn singleton_nth_lsb(n: usize) -> Self;
-    fn nth_lsb(self, n: usize) -> bool {
-        self.overlaps(Self::singleton_nth_lsb(n))
-    }
-}
-impl BitMask for usize {
-    const NULL: Self = 0;
-    fn singleton_nth_lsb(n: usize) -> Self {
-        1 << n
-    }
-}
 
-fn new_state(old_state: &State, action_mask: usize, actions: &[Action]) -> Option<State> {
-    let mut new_state = State { store: hm! {} };
-    let action_iter = actions
-        .iter()
-        .enumerate()
-        .filter_map(|(i, a)| action_mask.nth_lsb(i).bmap(a));
-    for action in action_iter {
-        for (k, v) in action.pre_cond.iter() {
-            match old_state.store.get(&k) {
-                Some(v2) if v2 == v => {}
-                _ => return None,
-            }
-        }
-        for (k, v) in action.post_cond.iter() {
-            match new_state.store.insert(*k, *v) {
-                Some(v2) if v2 != *v => return None,
-                _ => {}
-            }
-        }
-    }
-    println!("NEW ONLY {:?}", new_state);
-    for (k, v) in old_state.store.iter() {
-        new_state.store.entry(*k).or_insert(*v);
-    }
-    Some(new_state)
-}
-
-fn zop(spec: &Spec, state: &State) {
-    assert!(!spec.actions.is_empty());
-    let all = (1 << spec.actions.len()) - 1;
-    println!("{:>10b} <--ALL", all);
-    let mut action_mask = 0usize;
-    loop {
-        for rule in spec.masked_rules.iter() {
-            if action_mask.is_superset_of(rule.if_all) {
-                action_mask |= rule.then_all;
-            }
-            if action_mask.overlaps(rule.then_none) {
-                if action_mask >= all {
-                    break;
+impl PathNode {
+    fn assignment(&self, spec: &Specification, var: Var) -> Option<Val> {
+        match self {
+            PathNode::Start { start_state } => start_state.assignments.get(&var).copied(),
+            PathNode::Next { prev, acts_indexes } => {
+                for act_index in acts_indexes.iter() {
+                    if let Some(&val) = spec.actions[act_index].dst_pstate.assignments.get(&var) {
+                        return Some(val);
+                    }
                 }
-                action_mask += 1;
+                prev.assignment(spec, var)
             }
         }
-        println!("{:>10b} LOGICALLY OK", action_mask);
-        if let Some(new_state) = new_state(state, action_mask, &spec.actions) {
-            println!("ACTIONS OK; NEW STATE: {:?}", new_state);
+    }
+    fn state_assigns_superset(
+        &self,
+        spec: &Specification,
+        other: &PartialState,
+    ) -> Result<(), Var> {
+        for (&var, &other_val) in other.assignments.iter() {
+            match self.assignment(spec, var) {
+                None => return Err(var),
+                Some(my_val) if my_val != other_val => return Err(var),
+                Some(_) => {}
+            }
         }
-        if action_mask >= all {
-            break;
-        }
-        action_mask += 1;
+        Ok(())
     }
 }
 
-/*
-TODO: preprocess
-- identify subset of actions that cannot trigger in this state
--
-*/
-
-fn main() {
-    let spec = Spec {
-        actions: vec![
-            Action {
-                pre_cond: hm! { Var(0) => Val(0) },
-                post_cond: hm! { Var(0) => Val(1)},
-            },
-            Action {
-                pre_cond: hm! {},
-                post_cond: hm! { Var(1) => Val(2)},
-            },
-        ],
-        masked_rules: vec![
-            MaskedRule {
-                if_all: 0b00001,
-                then_all: 0b00011,
-                then_none: 0b0000,
-            }, //yass
-            MaskedRule {
-                if_all: 0b00000,
-                then_all: 0b00000,
-                then_none: 0b00000,
-            }, //yass
-        ],
-    };
-    let state = State {
-        store: hm! { Var(0) => Val(0)},
-    };
-    zop(&spec, &state);
+impl<'a> NextStateStepIter<'a> {
+    fn new(prev: &'a Arc<PathNode>, spec: &'a Specification) -> Self {
+        Self { prev, spec, next_subset_to_consider: (0..spec.actions.len()).collect() }
+    }
 }
+impl Iterator for NextStateStepIter<'_> {
+    type Item = PathNode;
+    fn next(&mut self) -> Option<PathNode> {
+        loop {
+            if self.next_subset_to_consider.is_empty() {
+                return None;
+            }
+            // try return this
+            self.next_subset_to_consider.try_decrease_in_powerset_order();
+        }
+    }
+}
+
+impl Specification {
+    fn paths_to_duty(&self, start_state: PartialState, duty_index: usize) -> Vec<PathNode> {
+        let duty = &self.duties[duty_index];
+        let mut incomplete = vec![PathNode::Start { start_state }];
+        let mut complete = vec![];
+        while let Some(path) = incomplete.pop() {
+            if path.state_assigns_superset(self, &duty.partial_state).is_ok() {
+                complete.push(path)
+            } else {
+                let prev = Arc::new(path);
+                let next_iter = NextStateStepIter::new(&prev, self);
+                incomplete.extend(next_iter);
+            }
+        }
+        complete
+    }
+    /// does NOT deduplicate anything. Computes union of actions, duties, etc.
+    fn subsume(&mut self, other: &Self) {
+        self.duties.extend(other.duties.iter().cloned());
+        self.actions.extend(other.actions.iter().cloned());
+        self.arules.extend(other.arules.iter().cloned());
+        self.drules.extend(other.drules.iter().cloned());
+    }
+}
+
+fn main() {}
