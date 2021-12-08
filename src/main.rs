@@ -1,13 +1,10 @@
-use core::hash::Hash;
-use std::collections::{HashMap, HashSet};
-use std::sync::Arc;
-
 use chunked_index_set::{ChunkRead, IndexSet};
+use std::{collections::HashMap, sync::Arc};
 
 type Var = u32;
 type Val = u32;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 struct PartialState {
     assignments: HashMap<Var, Val>,
 }
@@ -57,7 +54,6 @@ enum PathNode {
 an pair of actions is mutually inconsistent IFF either:
 - preconditions disagree
 - preconditions discgree
-
 */
 
 struct NextStateStepIter<'a> {
@@ -76,7 +72,6 @@ impl PartialState {
             for (var, my_val) in self.assignments.iter() {
                 match other.assignments.get(var) {
                     Some(other_val) if other_val != my_val => return Some(*var),
-
                     _ => {}
                 }
             }
@@ -113,6 +108,31 @@ impl PathNode {
         }
         Ok(())
     }
+    fn try_create_next_step(
+        me: &Arc<Self>,
+        acts_indexes: &IndexSet<2>,
+        spec: &Specification,
+    ) -> Option<Self> {
+        // 1: check that all action rules are OK
+        for arule in spec.arules.iter() {
+            if arule.if_all.is_superset_of(acts_indexes)
+                && (!arule.then_all.is_subset_of(acts_indexes)
+                    || !arule.then_none.is_disjoint_with(acts_indexes))
+            {
+                return None;
+            }
+        }
+        // 2: check that all action post conditions are consistent
+        if !spec.postconditions_consistent(acts_indexes) {
+            return None;
+        }
+        // 3: check that all action preconditions are OK
+        for act_index in acts_indexes.iter() {
+            let action = &spec.actions[act_index];
+            me.state_assigns_superset(spec, &action.dst_pstate).ok()?;
+        }
+        Some(Self::Next { prev: me.clone(), acts_indexes: acts_indexes.clone() })
+    }
 }
 
 impl<'a> NextStateStepIter<'a> {
@@ -128,12 +148,30 @@ impl Iterator for NextStateStepIter<'_> {
                 return None;
             }
             // try return this
+            let next =
+                PathNode::try_create_next_step(self.prev, &self.next_subset_to_consider, self.spec);
             self.next_subset_to_consider.try_decrease_in_powerset_order();
+            if next.is_some() {
+                return next;
+            }
         }
     }
 }
 
 impl Specification {
+    fn postconditions_consistent(&self, action_indexes: &IndexSet<2>) -> bool {
+        let mut delta = PartialState::default();
+        for action_index in action_indexes.iter() {
+            let action = &self.actions[action_index];
+            for (&var, &action_val) in action.dst_pstate.assignments.iter() {
+                match delta.assignments.insert(var, action_val) {
+                    Some(delta_val) if action_val != delta_val => return false,
+                    _ => {}
+                }
+            }
+        }
+        true
+    }
     fn paths_to_duty(&self, start_state: PartialState, duty_index: usize) -> Vec<PathNode> {
         let duty = &self.duties[duty_index];
         let mut incomplete = vec![PathNode::Start { start_state }];
