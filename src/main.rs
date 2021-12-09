@@ -1,2 +1,2 @@
-mod graphstate;
+mod partialmap;
 fn main() {}

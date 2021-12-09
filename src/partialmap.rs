@@ -2,8 +2,6 @@ use chunked_index_set::ChunkRead;
 use maplit::hashmap as hm;
 use std::{collections::HashMap, sync::Arc};
 
-// mod varintset;
-
 type IndexSet = chunked_index_set::IndexSet<1>;
 
 macro_rules! zrintln {
@@ -57,8 +55,6 @@ pub struct Specification {
 }
 
 ////////////////////
-
-///
 #[derive(Debug, Clone)]
 enum PathNode {
     Start { start_state: PartialState },
@@ -72,27 +68,16 @@ struct NextStateStepIter<'a> {
     next_subset_to_consider: IndexSet,
 }
 
-///////////////////
-impl Rule {
-    fn satisfied_by(&self, indexes: &IndexSet) -> bool {
-        !self.if_all.is_subset_of(indexes)
-            || (self.then_all.is_subset_of(indexes) && self.then_none.is_disjoint_with(indexes))
-    }
+#[derive(Debug)]
+enum StepError {
+    ViolatesActionRule { action_rule_index: usize },
+    ViolatesActionPrecondition { action_index: usize, var: Var },
+    ConflictingAssignments { var: Var },
+    ViolatesDutyRule { duty_rule_index: usize },
 }
-impl PathNode {
-    fn assignment(&self, spec: &Specification, var: Var) -> Option<Val> {
-        match self {
-            PathNode::Start { start_state } => start_state.assignments.get(&var).copied(),
-            PathNode::Next { prev, acts_indexes } => {
-                for act_index in acts_indexes.iter() {
-                    if let Some(&val) = spec.actions[act_index].dst_pstate.assignments.get(&var) {
-                        return Some(val);
-                    }
-                }
-                prev.assignment(spec, var)
-            }
-        }
-    }
+
+trait ReadableState {
+    fn assignment(&self, spec: &Specification, var: Var) -> Option<Val>;
     fn state_assigns_superset(
         &self,
         spec: &Specification,
@@ -107,54 +92,93 @@ impl PathNode {
         }
         Ok(())
     }
-    fn satisfies_duty(&self, spec: &Specification, duty: &Duty) -> Result<(), Var> {
+    fn state_satisfies_duty(&self, spec: &Specification, duty: &Duty) -> Result<(), Var> {
         self.state_assigns_superset(spec, &duty.partial_state)
     }
-    fn satisfies_drules(&self, spec: &Specification) -> bool {
-        let satisfied_duties = (0..spec.duties.len())
-            .filter(|&duty_index| self.satisfies_duty(spec, &spec.duties[duty_index]).is_ok())
-            .collect();
-        zrintln!("Satisfies duties {:?}", &satisfied_duties);
-        for drule in spec.drules.iter() {
-            if !drule.satisfied_by(&satisfied_duties) {
-                return false;
+    fn satisfied_duties(&self, spec: &Specification) -> IndexSet {
+        (0..spec.duties.len())
+            .filter(|&duty_index| self.state_satisfies_duty(spec, &spec.duties[duty_index]).is_ok())
+            .collect()
+    }
+    fn violated_duty_rule(&self, spec: &Specification) -> Option<usize> {
+        let satisfied_duties = self.satisfied_duties(spec);
+        spec.drules
+            .iter()
+            .enumerate()
+            .find(|(_, duty_rule)| !duty_rule.satisfied_by(&satisfied_duties))
+            .map(|(duty_rule_index, _)| duty_rule_index)
+    }
+}
+
+///////////////////
+
+impl Rule {
+    fn satisfied_by(&self, indexes: &IndexSet) -> bool {
+        // trivial closures enable short-circuiting, while avoiding having to inline the bodies
+        let if_all = || self.if_all.is_subset_of(indexes);
+        let then_all = || self.then_all.is_subset_of(indexes);
+        let else_none = || self.then_none.is_disjoint_with(indexes);
+        !if_all() || (then_all() && else_none())
+    }
+}
+
+impl ReadableState for PartialState {
+    fn assignment(&self, _spec: &Specification, var: Var) -> Option<Val> {
+        self.assignments.get(&var).copied()
+    }
+}
+impl ReadableState for PathNode {
+    fn assignment(&self, spec: &Specification, var: Var) -> Option<Val> {
+        match self {
+            PathNode::Start { start_state } => start_state.assignment(spec, var),
+            PathNode::Next { prev, acts_indexes } => {
+                for act_index in acts_indexes.iter() {
+                    if let Some(val) = spec.actions[act_index].dst_pstate.assignment(spec, var) {
+                        return Some(val);
+                    }
+                }
+                prev.assignment(spec, var)
             }
         }
-        true
     }
+}
+
+impl PathNode {
     fn try_create_next_step(
         me: &Arc<Self>,
         acts_indexes: &IndexSet,
         spec: &Specification,
-    ) -> Option<Self> {
+    ) -> Result<Self, StepError> {
         // 1: check that all action rules are OK
-        for arule in spec.arules.iter() {
-            if !arule.satisfied_by(acts_indexes) {
-                zrintln!("rule {:?} mismatch", arule);
-                return None;
-            }
+        if let Some((action_rule_index, _)) = spec
+            .arules
+            .iter()
+            .enumerate()
+            .find(|(_, action_rule)| !action_rule.satisfied_by(acts_indexes))
+        {
+            return Err(StepError::ViolatesActionRule { action_rule_index });
         }
-        // 2: check that all action post conditions are consistent
-        if !spec.postconditions_consistent(acts_indexes) {
-            zrintln!("postconditions_inconsistent");
-            return None;
-        }
-        // 3: check that all action preconditions are OK
-        for act_index in acts_indexes.iter() {
-            let action = &spec.actions[act_index];
+
+        // 2: check that all action preconditions are satisfied by our state
+        for action_index in acts_indexes.iter() {
+            let action = &spec.actions[action_index];
             if let Err(var) = me.state_assigns_superset(spec, &action.src_pstate) {
-                zrintln!("preconds bad {:?}", var);
-                return None;
+                return Err(StepError::ViolatesActionPrecondition { action_index, var });
             }
         }
+
+        // 3: check that all action post conditions are mutually consistent
+        if let Some(var) = spec.conflicting_assignments(acts_indexes) {
+            return Err(StepError::ConflictingAssignments { var });
+        }
+
         // 4: check that destination state satisfies all duty rules
         let new = Self::Next { prev: me.clone(), acts_indexes: acts_indexes.clone() };
-        if !new.satisfies_drules(spec) {
-            return None;
+        if let Some(duty_rule_index) = new.violated_duty_rule(spec) {
+            return Err(StepError::ViolatesDutyRule { duty_rule_index });
         }
-        // ok!
-        zrintln!("ACCEPTING {:#?}", &new);
-        Some(new)
+        // ok! return the result of taking this step
+        Ok(new)
     }
 }
 
@@ -173,29 +197,31 @@ impl Iterator for NextStateStepIter<'_> {
             if self.next_subset_to_consider.is_empty() {
                 return None;
             }
-            let next =
+            let result_next =
                 PathNode::try_create_next_step(self.prev, &self.next_subset_to_consider, self.spec);
+            zrintln!("result next {:?}", &result_next);
+            let maybe_next = result_next.ok();
             self.next_subset_to_consider.try_decrease_in_powerset_order();
-            if next.is_some() {
-                return next;
+            if maybe_next.is_some() {
+                return maybe_next;
             }
         }
     }
 }
 
 impl Specification {
-    fn postconditions_consistent(&self, action_indexes: &IndexSet) -> bool {
+    fn conflicting_assignments(&self, action_indexes: &IndexSet) -> Option<Var> {
         let mut delta = PartialState::default();
         for action_index in action_indexes.iter() {
             let action = &self.actions[action_index];
             for (&var, &action_val) in action.dst_pstate.assignments.iter() {
                 match delta.assignments.insert(var, action_val) {
-                    Some(delta_val) if action_val != delta_val => return false,
+                    Some(delta_val) if action_val != delta_val => return Some(var),
                     _ => {}
                 }
             }
         }
-        true
+        None
     }
     fn paths_to_duty(&self, start_state: PartialState, duty_index: usize) -> Vec<PathNode> {
         let duty = &self.duties[duty_index];
@@ -228,7 +254,8 @@ impl Specification {
     }
 }
 
-fn main() {
+#[test]
+fn path_test() {
     let s = Specification {
         actions: vec![
             Action {
