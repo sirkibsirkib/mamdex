@@ -2,6 +2,8 @@ use chunked_index_set::ChunkRead;
 use maplit::hashmap as hm;
 use std::{collections::HashMap, sync::Arc};
 
+// mod varintset;
+
 type IndexSet = chunked_index_set::IndexSet<1>;
 
 macro_rules! zrintln {
