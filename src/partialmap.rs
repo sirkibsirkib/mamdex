@@ -1,5 +1,6 @@
 use chunked_index_set::ChunkRead;
 use maplit::hashmap as hm;
+use std::borrow::Cow;
 use std::{collections::HashMap, sync::Arc};
 
 type IndexSet = chunked_index_set::IndexSet<1>;
@@ -9,6 +10,11 @@ macro_rules! zrintln {
         println!( $( $arg ) * );
     })
 }
+// macro_rules! zrint {
+//     ($($arg:tt)*) => ({
+//         print!( $( $arg ) * );
+//     })
+// }
 
 type Var = u32;
 type Val = u32;
@@ -78,6 +84,7 @@ enum StepError {
 
 trait ReadableState {
     fn assignment(&self, spec: &Specification, var: Var) -> Option<Val>;
+    fn to_partial_state(&self, spec: &Specification) -> Cow<PartialState>;
     fn state_assigns_superset(
         &self,
         spec: &Specification,
@@ -126,6 +133,9 @@ impl ReadableState for PartialState {
     fn assignment(&self, _spec: &Specification, var: Var) -> Option<Val> {
         self.assignments.get(&var).copied()
     }
+    fn to_partial_state(&self, _spec: &Specification) -> Cow<PartialState> {
+        Cow::Borrowed(self)
+    }
 }
 impl ReadableState for PathNode {
     fn assignment(&self, spec: &Specification, var: Var) -> Option<Val> {
@@ -138,6 +148,26 @@ impl ReadableState for PathNode {
                     }
                 }
                 prev.assignment(spec, var)
+            }
+        }
+    }
+    fn to_partial_state(&self, spec: &Specification) -> Cow<PartialState> {
+        let mut c = PartialState::default();
+        let mut n = self;
+        loop {
+            match n {
+                Self::Start { start_state } => {
+                    for (&var, &val) in start_state.assignments.iter() {
+                        c.assignments.entry(var).or_insert(val);
+                    }
+                    return Cow::Owned(c);
+                }
+                Self::Next { prev, acts_indexes } => {
+                    for (var, val) in spec.actions_assignments(&acts_indexes) {
+                        c.assignments.entry(var).or_insert(val);
+                    }
+                    n = prev;
+                }
             }
         }
     }
@@ -168,7 +198,7 @@ impl PathNode {
         }
 
         // 3: check that all action post conditions are mutually consistent
-        if let Some(var) = spec.conflicting_assignments(acts_indexes) {
+        if let Err(var) = spec.consistent_assignments(acts_indexes) {
             return Err(StepError::ConflictingAssignments { var });
         }
 
@@ -210,18 +240,24 @@ impl Iterator for NextStateStepIter<'_> {
 }
 
 impl Specification {
-    fn conflicting_assignments(&self, action_indexes: &IndexSet) -> Option<Var> {
-        let mut delta = PartialState::default();
-        for action_index in action_indexes.iter() {
+    fn actions_assignments<'a>(
+        &'a self,
+        action_indexes: &'a IndexSet,
+    ) -> impl Iterator<Item = (Var, Val)> + 'a {
+        action_indexes.iter().flat_map(|action_index| {
             let action = &self.actions[action_index];
-            for (&var, &action_val) in action.dst_pstate.assignments.iter() {
-                match delta.assignments.insert(var, action_val) {
-                    Some(delta_val) if action_val != delta_val => return Some(var),
-                    _ => {}
-                }
+            action.dst_pstate.assignments.iter().map(|(&a, &b)| (a, b))
+        })
+    }
+    fn consistent_assignments(&self, action_indexes: &IndexSet) -> Result<PartialState, Var> {
+        let mut c = PartialState::default();
+        for (var, action_val) in self.actions_assignments(action_indexes) {
+            match c.assignments.insert(var, action_val) {
+                Some(delta_val) if action_val != delta_val => return Err(var),
+                _ => {}
             }
         }
-        None
+        Ok(c)
     }
     fn paths_to_duty(&self, start_state: PartialState, duty_index: usize) -> Vec<PathNode> {
         let duty = &self.duties[duty_index];
@@ -256,7 +292,7 @@ impl Specification {
 
 #[test]
 fn path_test() {
-    let s = Specification {
+    let spec = Specification {
         actions: vec![
             Action {
                 name: "Var(99) := 99",
@@ -274,7 +310,7 @@ fn path_test() {
             name: "Duty 1 always FALSE",
             if_all: Default::default(),
             then_all: Default::default(),
-            then_none: [1].into_iter().collect(),
+            then_none: Some(1).into_iter().collect(),
         }],
         duties: vec![
             Duty {
@@ -297,6 +333,9 @@ fn path_test() {
     };
     let start_state = PartialState { assignments: hm! { 0 => 0, 1 => 1} };
     let duty_index = 0;
-    let r = s.paths_to_duty(start_state, duty_index);
+    let r = spec.paths_to_duty(start_state, duty_index);
+    for q in r.iter() {
+        zrintln!(":: {:?}", ReadableState::to_partial_state(q, &spec));
+    }
     zrintln!("r {:#?}", r);
 }
