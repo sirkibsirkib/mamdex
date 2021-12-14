@@ -10,11 +10,11 @@ macro_rules! zrintln {
         println!( $( $arg ) * );
     })
 }
-// macro_rules! zrint {
-//     ($($arg:tt)*) => ({
-//         print!( $( $arg ) * );
-//     })
-// }
+macro_rules! zrint {
+    ($($arg:tt)*) => ({
+        print!( $( $arg ) * );
+    })
+}
 
 type Var = u32;
 type Val = u32;
@@ -174,6 +174,22 @@ impl ReadableState for PathNode {
 }
 
 impl PathNode {
+    fn zrinty_up(&self, spec: &Specification) -> PartialState {
+        match self {
+            Self::Start { start_state } => {
+                zrint!("{:?}", start_state);
+                start_state.clone()
+            }
+            Self::Next { prev, acts_indexes } => {
+                let mut state = prev.zrinty_up(spec);
+                for (var, val) in spec.actions_assignments(acts_indexes) {
+                    state.assignments.insert(var, val);
+                }
+                zrint!("\n=={:?}==> {:?}", acts_indexes, state);
+                state
+            }
+        }
+    }
     fn try_create_next_step(
         me: &Arc<Self>,
         acts_indexes: &IndexSet,
@@ -306,12 +322,15 @@ fn path_test() {
             },
         ],
         arules: vec![],
-        drules: vec![Rule {
-            name: "Duty 1 always FALSE",
-            if_all: Default::default(),
-            then_all: Default::default(),
-            then_none: Some(1).into_iter().collect(),
-        }],
+        drules: vec![
+            // the only duty rule
+            Rule {
+                name: "Duty 1 always FALSE",
+                if_all: Default::default(),
+                then_all: Default::default(),
+                then_none: std::iter::once(1).collect(),
+            },
+        ],
         duties: vec![
             Duty {
                 name: "Var(0) == 3",
@@ -332,10 +351,20 @@ fn path_test() {
         ],
     };
     let start_state = PartialState { assignments: hm! { 0 => 0, 1 => 1} };
+
+    // run!
     let duty_index = 0;
     let r = spec.paths_to_duty(start_state, duty_index);
-    for q in r.iter() {
-        zrintln!(":: {:?}", ReadableState::to_partial_state(q, &spec));
+
+    zrintln!("===================");
+    for (i, q) in r.iter().enumerate() {
+        q.zrinty_up(&spec);
+        zrintln!("\n");
+        // zrintln!(
+        //     "path #{}:\n{:#?}\nends with {:?}",
+        //     i,
+        //     q,
+        //     ReadableState::to_partial_state(q, &spec)
+        // );
     }
-    zrintln!("r {:#?}", r);
 }
