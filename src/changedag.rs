@@ -37,11 +37,22 @@ struct State {
 type Delta = State;
 
 struct Change {
-    compute_delta: Box<dyn Fn(&dyn FnMut(FluentIndex) -> bool) -> State>,
+    compute_delta: Box<dyn Fn(&mut dyn FnMut(FluentIndex) -> bool) -> State>,
+    // compute_delta: Box<dyn Fn(&mut dyn Statelike) -> State>,
 }
 
 //////////
 
+impl FromIterator<(FluentIndex, bool)> for State {
+    fn from_iter<T: IntoIterator<Item = (FluentIndex, bool)>>(iter: T) -> Self {
+        let mut me = Self::default();
+        for (fluent, value) in iter.into_iter() {
+            me.known.insert(fluent);
+            me.holds.make_contains(fluent, value);
+        }
+        me
+    }
+}
 impl State {
     fn test(&self, fluent: FluentIndex) -> Option<bool> {
         if self.known.contains(fluent) {
@@ -96,7 +107,12 @@ impl Change {
 
 #[test]
 fn zorp() {
-    let c = Change { compute_delta: Box::new(|_state| Delta::default()) };
+    let c = Change {
+        compute_delta: Box::new(|closure: &mut dyn FnMut(FluentIndex) -> bool| {
+            let arr = [(0, !(closure)(0))];
+            arr.into_iter().collect()
+        }),
+    };
     let deltas = c.compute_deltas(Delta::default());
     println!("{:#?}", deltas);
 }
