@@ -37,7 +37,7 @@ struct State {
 type Delta = State;
 
 struct Change {
-    compute_delta: Box<dyn Fn(&mut dyn FnMut(FluentIndex) -> bool) -> State>,
+    compute_delta: Box<dyn Fn(&mut dyn FnMut(FluentIndex) -> bool) -> Option<State>>,
     // compute_delta: Box<dyn Fn(&mut dyn Statelike) -> State>,
 }
 
@@ -99,7 +99,9 @@ impl Change {
                 }
                 holds
             };
-            deltas.insert((self.compute_delta)(&mut funcy));
+            if let Some(delta) = (self.compute_delta)(&mut funcy) {
+                deltas.insert(delta);
+            }
         }
         deltas
     }
@@ -110,7 +112,7 @@ fn zorp() {
     let c = Change {
         compute_delta: Box::new(|closure: &mut dyn FnMut(FluentIndex) -> bool| {
             let arr = [(0, !(closure)(0))];
-            arr.into_iter().collect()
+            Some(arr.into_iter().collect())
         }),
     };
     let deltas = c.compute_deltas(Delta::default());
