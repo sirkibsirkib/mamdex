@@ -1,7 +1,9 @@
-use chunked_index_set::ChunkRead;
-use core::marker::PhantomData;
+use core::num::NonZeroU32;
 use std::collections::HashSet;
+
 use std::sync::Arc;
+
+// type IndexSet = chunked_index_set::IndexSet<2>;
 
 /*
 let's take the union approach; a fact is true iff its postulated OR there's 1+ ways to derive it
@@ -10,148 +12,65 @@ we don't need non-boolean predicates; they are just partial functions we can wor
 duties are just facts marked as "necessary for satisfaction". let's worry about that later
 */
 
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Hash)]
 struct Atom {
-	data: u32
+    data: NonZeroU32,
 }
-struct Fact {
-	Arc<[Atom]>
-}
-struct FactSet {
-	HashSet<Fact>
-}
-struct State {
-
-}
-
-type IndexSet = chunked_index_set::IndexSet<1>;
-
-#[derive(Debug)]
-struct SpecStore<T> {
-    data: Vec<T>,
-}
-impl<T> SpecStore<T> {
-    fn get(&self, key: SpecKey<T>) -> Option<&T> {
-        self.data.get(key.index)
-    }
-}
-impl<T> Default for SpecStore<T> {
-    fn default() -> Self {
-        Self { data: Default::default() }
-    }
-}
-
-#[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
-struct SpecKey<T> {
-    index: usize,
-    _phantom: PhantomData<T>,
-}
-
-#[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
-struct Atom {
-    data: u32,
-}
-
-#[derive(Debug, Clone, Eq, PartialEq, Hash)]
+#[derive(Debug, Clone, Hash, Eq, PartialEq)]
 struct Fact {
     atoms: Arc<[Atom]>,
 }
+#[derive(Debug, Clone, Hash)]
+struct FactPattern {
+    maybe_atoms: Arc<[Option<Atom>]>,
+}
 
-#[derive(Debug, Clone, Eq, PartialEq)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+struct Label {
+    data: u32,
+}
+trait FactState: Clone {
+    type QueryIter: Iterator<Item = Fact>;
+    fn fact_query(&self, fact: &Fact) -> bool;
+    fn pattern_query(&self, pattern: &FactPattern) -> Self::QueryIter;
+    fn create(&mut self, fact: &Fact);
+    fn terminate(&mut self, fact: &Fact);
+}
+
+trait Specification<S: FactState> {
+    fn duty_compliant(&self, state: &S) -> bool;
+    fn action_compliant(&self, source: &S, label: Label, dest: &S) -> bool;
+    fn try_act(&self, source: &S, label: Label) -> Option<S>;
+}
+
+#[derive(Debug, Clone)]
 struct FactSet {
-    facts: HashSet<Fact>,
+    hold: HashSet<Fact>,
 }
-
-enum StateToState {
-    Identity,
-    Constant(Arc<FactSet>),
-    UnionOf([Arc<StateToState>; 2]),
-    IntersectionOf([Arc<StateToState>; 2]),
-    DifferenceWith([Arc<StateToState>; 2]),
+impl FactPattern {
+    fn matches(&self, fact: &Fact) -> bool {
+        self.maybe_atoms.len() == fact.atoms.len()
+            && self.maybe_atoms.iter().zip(fact.atoms.iter()).all(|(pat, at)| match (pat, at) {
+                (None, _) => true,
+                (Some(pat), at) => pat == at,
+            })
+    }
 }
-impl StateToState {
-    fn flatten(&self, state: Arc<FactSet>) -> Arc<FactSet> {
-        match self {
-            Self::Identity => state,
-            Self::Constant(x) => x.clone(),
-            Self::UnionOf([a, b]) => Arc::new(FactSet {
-                facts: a
-                    .flatten(state.clone())
-                    .facts
-                    .union(&b.flatten(state).facts)
-                    .cloned()
-                    .collect(),
-            }),
-            Self::IntersectionOf([a, b]) => Arc::new(FactSet {
-                facts: a
-                    .flatten(state.clone())
-                    .facts
-                    .intersection(&b.flatten(state).facts)
-                    .cloned()
-                    .collect(),
-            }),
-            Self::DifferenceWith([a, b]) => Arc::new(FactSet {
-                facts: a
-                    .flatten(state.clone())
-                    .facts
-                    .difference(&b.flatten(state).facts)
-                    .cloned()
-                    .collect(),
-            }),
-        }
+impl FactState for FactSet {
+    type QueryIter = Cloned<Filter<hash_set::Iter<Fact>>;
+    fn fact_query(&self, fact: &Fact) -> bool {
+        self.hold.contains(fact)
+    }
+    fn pattern_query(&self, pattern: &FactPattern) -> Self::QueryIter {
+        self.hold.iter().filter(|fact| pattern.matches(fact)).cloned()
+    }
+    fn create(&mut self, fact: &Fact) {
+        self.hold.insert(fact.clone());
+    }
+    fn terminate(&mut self, fact: &Fact) {
+        self.hold.remove(fact);
     }
 }
 
-enum StateToBool {
-    Const(bool),
-    Empty,
-    Not(Arc<StateToBool>),
-}
-impl StateToBool {
-    fn eval(&self, state: Arc<FactSet>) -> bool {
-        match self {
-            Self::Empty => state.facts.is_empty(),
-            Self::Not(x) => !x.eval(state),
-            Self::Const(b) => *b,
-        }
-    }
-}
-
-struct Action {
-    precond: StateToBool,
-    postcond: StateToBool,
-}
-struct Spec {
-    state_pred: Arc<StateToBool>,
-    actions: Vec<Action>,
-}
-
-impl Spec {
-    fn accepts_transition(
-        &self,
-        action_indexes: IndexSet,
-        src: Arc<FactSet>,
-        dest: Arc<FactSet>,
-    ) -> bool {
-        action_indexes.iter().all(|action_index| {
-            let action = &self.actions[action_index];
-            action.precond.eval(src.clone()) && action.postcond.eval(dest.clone())
-        })
-    }
-    fn accepts_state(&self, fs: Arc<FactSet>) -> bool {
-        self.state_pred.eval(fs)
-    }
-    fn update(&self, state: Arc<FactSet>, postcond: Arc<StateToState>) -> Arc<FactSet> {
-        todo!()
-    }
-}
-
-#[test]
-fn zoop() {
-    let mut spec = Spec { actions: vec![], state_pred: Arc::new(StateToBool::Const(true)) };
-    let t = spec.accepts_state(Arc::new(FactSet { facts: Default::default() }));
-    println!("{}", t);
-}
-
-// each state should have a FactSet (which I can query instantaneous properties)
-// each transition has (1) a set of actions, (2) pre-condition, and (3) post-condition
-// post-conditions
+struct Agreement {}
+// impl<S: FactState> Specification<S>
