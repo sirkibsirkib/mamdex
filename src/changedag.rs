@@ -2,6 +2,8 @@ use chunked_index_set::ChunkRead;
 
 use std::collections::HashSet;
 
+use core::cmp::Ordering::{self, *};
+
 type IndexSet = chunked_index_set::IndexSet<1>;
 type FluentIndexSet = IndexSet;
 type FluentIndex = usize;
@@ -26,10 +28,10 @@ struct SdVecSet<T: Ord> {
     // invariant: sorted, deduplicated
     vec: Vec<T>,
 }
-#[derive(Debug, Eq, PartialEq, Ord, PartialOrd)]
+#[derive(Debug, Ord, PartialOrd, Eq, PartialEq)]
 struct Edge {
-    from: ChangeDagIndex,
     to: ChangeDagIndex,
+    from: ChangeDagIndex,
 }
 struct ChangeDag {
     verts: ChangeDagIndexSet, // set of Change identifiers
@@ -42,6 +44,20 @@ struct TopSortIter<'a> {
     list: Vec<ChangeDagIndex>,
 }
 ////////////
+// impl PartialOrd for Edge {
+//     #[inline(always)]
+//     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+//         Some(self.cmp(other))
+//     }
+// }
+// impl Ord for Edge {
+//     fn cmp(&self, other: &Self) -> Ordering {
+//         match self.to.cmp(&other.to) {
+//             Equal => other.from.cmp(&other.from),
+//             o => o,
+//         }
+//     }
+// }
 impl FromIterator<(FluentIndex, bool)> for State {
     fn from_iter<T: IntoIterator<Item = (FluentIndex, bool)>>(iter: T) -> Self {
         let mut me = Self::default();
@@ -79,14 +95,13 @@ impl<T: Ord> SdVecSet<T> {
     }
 }
 impl ChangeDag {
-    fn edges_from(&self, from: ChangeDagIndex) -> &[Edge] {
-        use core::cmp::Ordering::*;
+    fn edges_to(&self, to: ChangeDagIndex) -> &[Edge] {
         let left = self.edges.vec[..]
-            .binary_search_by(|edge| if edge.from < from { Less } else { Greater })
+            .binary_search_by(|edge| if edge.to < to { Less } else { Greater })
             .unwrap_err();
         let right = left
             + self.edges.vec[left..]
-                .binary_search_by(|edge| if edge.from <= from { Less } else { Greater })
+                .binary_search_by(|edge| if edge.to <= to { Less } else { Greater })
                 .unwrap_err();
         &self.edges.vec[left..right]
     }
@@ -96,7 +111,9 @@ impl<'a> TopSortIter<'a> {
         Self { list: Vec::with_capacity(cd.verts.len()), vert_mask: cd.verts.clone(), cd }
     }
     fn fill_remaining(&mut self) {
-        while !self.vert_mask.is_empty() {}
+        while !self.vert_mask.is_empty() {
+            // select a max element
+        }
     }
     fn next(&mut self) -> Option<&[ChangeDagIndex]> {
         Some(&self.list)
@@ -137,7 +154,7 @@ fn zorp() {
         ]),
     };
     dbg!(&change_dag.edges);
-    dbg!(change_dag.edges_from(1));
+    dbg!(change_dag.edges_to(1));
     let c = Change {
         compute_delta: Box::new(|closure: &mut dyn FnMut(FluentIndex) -> bool| {
             let arr = [(0, !(closure)(0))];
