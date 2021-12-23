@@ -14,25 +14,6 @@ struct State {
     known: FluentIndexSet,
     holds: FluentIndexSet,
 }
-// impl PartialOrd for State {
-//     fn partial_cmp(&self, rhs: &Self) -> Option<std::cmp::Ordering> {
-//         Some(self.cmp(rhs))
-//     }
-// }
-// impl Ord for State {
-//     /// lexicographic chunk_list_cmp ordering of (known, holds).
-//     fn cmp(&self, rhs: &Self) -> std::cmp::Ordering {
-//         use core::cmp::Ordering::Equal;
-//         match self.known.chunk_list_cmp(&rhs.known) {
-//             Equal => self.holds.chunk_list_cmp(&rhs.holds),
-//             x => x,
-//         }
-//     }
-// }
-
-// trait Precondition {
-// 	fn query_fluent(&mut self, fluent: FluentIndex) -> bool;
-// }
 
 type Delta = State;
 
@@ -40,9 +21,27 @@ struct Change {
     compute_delta: Box<dyn Fn(&mut dyn FnMut(FluentIndex) -> bool) -> Option<State>>,
     // compute_delta: Box<dyn Fn(&mut dyn Statelike) -> State>,
 }
-
-//////////
-
+#[derive(Debug, Clone)]
+struct SdVecSet<T: Ord> {
+    // invariant: sorted, deduplicated
+    vec: Vec<T>,
+}
+#[derive(Debug, Eq, PartialEq, Ord, PartialOrd)]
+struct Edge {
+    from: ChangeDagIndex,
+    to: ChangeDagIndex,
+}
+struct ChangeDag {
+    verts: ChangeDagIndexSet, // set of Change identifiers
+    edges: SdVecSet<Edge>,
+}
+struct TopSortIter<'a> {
+    cd: &'a ChangeDag,
+    // list elements U vert_mask = cd.verts
+    vert_mask: IndexSet,
+    list: Vec<ChangeDagIndex>,
+}
+////////////
 impl FromIterator<(FluentIndex, bool)> for State {
     fn from_iter<T: IntoIterator<Item = (FluentIndex, bool)>>(iter: T) -> Self {
         let mut me = Self::default();
@@ -72,21 +71,37 @@ impl State {
         }
     }
 }
-
-struct Edge {
-    before: ChangeDagIndex,
-    after: ChangeDagIndex,
+impl<T: Ord> SdVecSet<T> {
+    fn new(mut vec: Vec<T>) -> Self {
+        vec.sort();
+        vec.dedup();
+        Self { vec }
+    }
 }
-struct ChangeDag {
-    verts: ChangeDagIndexSet, // set of Change identifiers
-    edges: Vec<Edge>,
+impl ChangeDag {
+    fn edges_from(&self, from: ChangeDagIndex) -> &[Edge] {
+        use core::cmp::Ordering::*;
+        let left = self.edges.vec[..]
+            .binary_search_by(|edge| if edge.from < from { Less } else { Greater })
+            .unwrap_err();
+        let right = left
+            + self.edges.vec[left..]
+                .binary_search_by(|edge| if edge.from <= from { Less } else { Greater })
+                .unwrap_err();
+        &self.edges.vec[left..right]
+    }
 }
-
-struct TopSortIter<'a> {
-    cd: &'a ChangeDag,
-    list: Vec<ChangeDagIndex>,
+impl<'a> TopSortIter<'a> {
+    fn new(&'a mut self, cd: &'a ChangeDag) -> Self {
+        Self { list: Vec::with_capacity(cd.verts.len()), vert_mask: cd.verts.clone(), cd }
+    }
+    fn fill_remaining(&mut self) {
+        while !self.vert_mask.is_empty() {}
+    }
+    fn next(&mut self) -> Option<&[ChangeDagIndex]> {
+        Some(&self.list)
+    }
 }
-
 impl Change {
     fn compute_deltas(&self, precond: State) -> HashSet<State> {
         let mut preconds_todo: Vec<State> = std::iter::once(precond).collect();
@@ -109,6 +124,20 @@ impl Change {
 
 #[test]
 fn zorp() {
+    let change_dag = ChangeDag {
+        verts: [].into_iter().collect(), // yarp
+        edges: SdVecSet::new(vec![
+            Edge { from: 0, to: 0 }, // yeh
+            Edge { from: 1, to: 1 }, // yeh
+            Edge { from: 1, to: 2 }, // yeh
+            Edge { from: 1, to: 3 }, // yeh
+            Edge { from: 1, to: 5 }, // yeh
+            Edge { from: 2, to: 2 }, // yeh
+            Edge { from: 2, to: 5 }, // yeh
+        ]),
+    };
+    dbg!(&change_dag.edges);
+    dbg!(change_dag.edges_from(1));
     let c = Change {
         compute_delta: Box::new(|closure: &mut dyn FnMut(FluentIndex) -> bool| {
             let arr = [(0, !(closure)(0))];
