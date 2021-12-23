@@ -95,12 +95,6 @@ impl<'a> TopSortIter<'a> {
     fn new(cd: &'a ChangeDag) -> Self {
         Self { list: Vec::with_capacity(cd.verts.len()), vert_mask: cd.verts.clone(), cd }
     }
-    fn vec_truncate_at(&mut self, index: usize) {
-        for &ci in self.list[index..].iter() {
-            self.vert_mask.insert(ci);
-        }
-        self.list.truncate(index);
-    }
     fn remove_min_larger_than(&mut self, than: ChangeIndex) -> Option<ChangeIndex> {
         for ci in self.vert_mask.iter().skip_while(|&ci| ci <= than) {
             // return this ci if all its incoming edges are from REMOVED verts
@@ -121,7 +115,9 @@ impl<'a> TopSortIter<'a> {
         }
         None
     }
-    fn fill_remaining(&mut self) {
+    /// Graph is a DAG -> this method succeeds.
+    /// Why? with any subset of verts removed, there are 1+ min elements!
+    fn min_fill_remaining(&mut self) {
         while !self.vert_mask.is_empty() {
             let ci = self.remove_min().expect("cycle detected!");
             self.list.push(ci);
@@ -130,20 +126,19 @@ impl<'a> TopSortIter<'a> {
     }
     fn next(&mut self) -> Option<&[ChangeIndex]> {
         if self.list.is_empty() {
-            // first time! find smallest element and return it
+            // first time! min_fill whole thing and return!
         } else {
             // not first time! need to advance past what I've got buffered
             loop {
                 let ci = self.list.pop()?;
                 self.vert_mask.insert(ci);
                 if let Some(larger) = self.remove_min_larger_than(ci) {
-                    println!("{:?} {:?}", ci, larger);
                     self.list.push(larger);
                     break;
                 }
             }
         }
-        self.fill_remaining();
+        self.min_fill_remaining();
         Some(&self.list)
     }
 }
@@ -170,19 +165,19 @@ impl Change {
 #[test]
 fn topological_sort() {
     let change_dag = ChangeDag {
-        verts: [0, 1, 2, 3].into_iter().collect(), // yarp
+        verts: [0, 1, 2, 3, 4].into_iter().collect(), // yarp
         edges: SdVecSet::new(vec![
             Edge { from: 0, to: 1 }, // yeh
-            Edge { from: 1, to: 2 }, // yeh
+            Edge { from: 0, to: 2 }, // yeh
+            Edge { from: 1, to: 3 }, // yeh
+            Edge { from: 2, to: 3 }, // yeh
+            Edge { from: 2, to: 4 }, // yeh
         ]),
     };
     let mut tsi = TopSortIter::new(&change_dag);
     while let Some(x) = tsi.next() {
         println!("{:?}", x);
     }
-    // dbg!(&change_dag.edges);
-    // dbg!(change_dag.edges_to(1));
-    // println!("{:#?}", deltas);
 }
 
 #[test]
