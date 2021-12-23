@@ -7,8 +7,8 @@ use core::cmp::Ordering::{self, *};
 type IndexSet = chunked_index_set::IndexSet<1>;
 type FluentIndexSet = IndexSet;
 type FluentIndex = usize;
-type ChangeDagIndexSet = IndexSet;
-type ChangeDagIndex = usize;
+type ChangeIndexSet = IndexSet;
+type ChangeIndex = usize;
 
 #[derive(Debug, Default, Clone, Hash, Eq, PartialEq)]
 struct State {
@@ -30,34 +30,19 @@ struct SdVecSet<T: Ord> {
 }
 #[derive(Debug, Ord, PartialOrd, Eq, PartialEq)]
 struct Edge {
-    to: ChangeDagIndex,
-    from: ChangeDagIndex,
+    to: ChangeIndex,
+    from: ChangeIndex,
 }
 struct ChangeDag {
-    verts: ChangeDagIndexSet, // set of Change identifiers
+    verts: ChangeIndexSet, // set of Change identifiers
     edges: SdVecSet<Edge>,
 }
 struct TopSortIter<'a> {
     cd: &'a ChangeDag,
     // list elements U vert_mask = cd.verts
-    vert_mask: IndexSet,
-    list: Vec<ChangeDagIndex>,
+    vert_mask: ChangeIndexSet,
+    list: Vec<ChangeIndex>,
 }
-////////////
-// impl PartialOrd for Edge {
-//     #[inline(always)]
-//     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-//         Some(self.cmp(other))
-//     }
-// }
-// impl Ord for Edge {
-//     fn cmp(&self, other: &Self) -> Ordering {
-//         match self.to.cmp(&other.to) {
-//             Equal => other.from.cmp(&other.from),
-//             o => o,
-//         }
-//     }
-// }
 impl FromIterator<(FluentIndex, bool)> for State {
     fn from_iter<T: IntoIterator<Item = (FluentIndex, bool)>>(iter: T) -> Self {
         let mut me = Self::default();
@@ -95,7 +80,7 @@ impl<T: Ord> SdVecSet<T> {
     }
 }
 impl ChangeDag {
-    fn edges_to(&self, to: ChangeDagIndex) -> &[Edge] {
+    fn edges_to(&self, to: ChangeIndex) -> &[Edge] {
         let left = self.edges.vec[..]
             .binary_search_by(|edge| if edge.to < to { Less } else { Greater })
             .unwrap_err();
@@ -107,15 +92,58 @@ impl ChangeDag {
     }
 }
 impl<'a> TopSortIter<'a> {
-    fn new(&'a mut self, cd: &'a ChangeDag) -> Self {
+    fn new(cd: &'a ChangeDag) -> Self {
         Self { list: Vec::with_capacity(cd.verts.len()), vert_mask: cd.verts.clone(), cd }
+    }
+    fn vec_truncate_at(&mut self, index: usize) {
+        for &ci in self.list[index..].iter() {
+            self.vert_mask.insert(ci);
+        }
+        self.list.truncate(index);
+    }
+    fn remove_min_larger_than(&mut self, than: ChangeIndex) -> Option<ChangeIndex> {
+        for ci in self.vert_mask.iter().skip_while(|&ci| ci <= than) {
+            // return this ci if all its incoming edges are from REMOVED verts
+            if self.cd.edges_to(ci).iter().all(|edge| !self.vert_mask.contains(edge.from)) {
+                self.vert_mask.remove(ci);
+                return Some(ci);
+            }
+        }
+        None
+    }
+    fn remove_min(&mut self) -> Option<ChangeIndex> {
+        for ci in self.vert_mask.iter() {
+            // return this ci if all its incoming edges are from REMOVED verts
+            if self.cd.edges_to(ci).iter().all(|edge| !self.vert_mask.contains(edge.from)) {
+                self.vert_mask.remove(ci);
+                return Some(ci);
+            }
+        }
+        None
     }
     fn fill_remaining(&mut self) {
         while !self.vert_mask.is_empty() {
-            // select a max element
+            let ci = self.remove_min().expect("cycle detected!");
+            self.list.push(ci);
         }
+        assert_eq!(self.list.len(), self.cd.verts.len());
     }
-    fn next(&mut self) -> Option<&[ChangeDagIndex]> {
+    fn next(&mut self) -> Option<&[ChangeIndex]> {
+        if self.list.is_empty() {
+            // first time! find smallest element and return it
+        } else {
+            // not first time! need to advance past what I've got buffered
+            loop {
+                let ci = self.list.pop()?;
+                self.vert_mask.insert(ci);
+                if let Some(larger) = self.remove_min_larger_than(ci) {
+                    println!("{:?} {:?}", ci, larger);
+                    self.list.push(larger);
+                    break;
+                }
+            }
+        }
+        self.fill_remaining();
         Some(&self.list)
     }
 }
@@ -140,27 +168,30 @@ impl Change {
 }
 
 #[test]
-fn zorp() {
+fn topological_sort() {
     let change_dag = ChangeDag {
-        verts: [].into_iter().collect(), // yarp
+        verts: [0, 1, 2, 3].into_iter().collect(), // yarp
         edges: SdVecSet::new(vec![
-            Edge { from: 0, to: 0 }, // yeh
-            Edge { from: 1, to: 1 }, // yeh
+            Edge { from: 0, to: 1 }, // yeh
             Edge { from: 1, to: 2 }, // yeh
-            Edge { from: 1, to: 3 }, // yeh
-            Edge { from: 1, to: 5 }, // yeh
-            Edge { from: 2, to: 2 }, // yeh
-            Edge { from: 2, to: 5 }, // yeh
         ]),
     };
-    dbg!(&change_dag.edges);
-    dbg!(change_dag.edges_to(1));
+    let mut tsi = TopSortIter::new(&change_dag);
+    while let Some(x) = tsi.next() {
+        println!("{:?}", x);
+    }
+    // dbg!(&change_dag.edges);
+    // dbg!(change_dag.edges_to(1));
+    // println!("{:#?}", deltas);
+}
+
+#[test]
+fn change_compute() {
     let c = Change {
         compute_delta: Box::new(|closure: &mut dyn FnMut(FluentIndex) -> bool| {
             let arr = [(0, !(closure)(0))];
             Some(arr.into_iter().collect())
         }),
     };
-    let deltas = c.compute_deltas(Delta::default());
-    println!("{:#?}", deltas);
+    let _deltas = c.compute_deltas(Delta::default());
 }
