@@ -1,3 +1,2 @@
-mod eventgraph;
-// mod partialmap;
+mod bitslice_and_graphs;
 fn main() {}
