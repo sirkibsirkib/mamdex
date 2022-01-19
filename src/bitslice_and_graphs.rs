@@ -118,15 +118,11 @@ enum Agent {
 
 #[derive(Debug, Serialize, Deserialize)]
 enum Task {
-    AddToHistory(EventGraph),
-    PrintHistory,
-    CurrentSituations,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-struct Input {
-    agent: Agent,
-    task: Task,
+    AgentHistoryAdd { agent: Agent, graph: EventGraph },
+    AgentHistoryPrint { agent: Agent },
+    AgentDestinationsPrint { agent: Agent },
+    GlobalHistoryPrint,
+    GlobalDestinationsPrint,
 }
 
 //////////////
@@ -325,7 +321,7 @@ impl Fact {
     }
 }
 
-pub fn run2() {
+pub fn repl() {
     let initial_situation = Situation::default();
     let initial_history = EventGraph::default();
     let mut agent_histories: EnumMap<Agent, EventGraph> = enum_map! {
@@ -340,21 +336,18 @@ pub fn run2() {
     loop {
         use std::io::BufRead;
         stdin_lock.read_line(&mut buffer).unwrap();
-        let got = ron::de::from_str::<Input>(&buffer);
+        let got = ron::de::from_str::<Task>(&buffer);
         println!("Got: {:#?}", &got);
         buffer.clear();
         match got {
-            Ok(Input { agent, task: Task::AddToHistory(event_graph) }) => {
-                agent_histories[agent] |= &event_graph;
+            Ok(Task::AgentHistoryAdd { agent, graph }) => agent_histories[agent] |= &graph,
+            Ok(Task::AgentHistoryPrint { agent }) => println!("{:#?}", &agent_histories[agent]),
+            Ok(Task::AgentDestinationsPrint { agent }) => {
+                println!("{:#?}", agent_histories[agent].destinations(&initial_situation))
             }
-
-            Ok(Input { agent, task: Task::PrintHistory }) => {
-                println!("{:#?}", &agent_histories[agent]);
-            }
-            Ok(Input { agent, task: Task::CurrentSituations }) => {
-                println!("{:#?}", agent_histories[agent].destinations(&initial_situation));
-            }
-            _ => {}
+            Ok(Task::GlobalHistoryPrint) => todo!(),
+            Ok(Task::GlobalDestinationsPrint) => todo!(),
+            Err(_) => {}
         }
     }
 }
