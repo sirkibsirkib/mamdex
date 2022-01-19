@@ -1,2 +1,4 @@
 mod bitslice_and_graphs;
-fn main() {}
+fn main() {
+    bitslice_and_graphs::run()
+}

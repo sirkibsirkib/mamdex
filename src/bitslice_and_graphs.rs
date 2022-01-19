@@ -1,37 +1,39 @@
 use core::hash::Hash;
 use core::ops::BitAnd;
-use core::ops::BitOr;
+use core::ops::BitOrAssign;
 use core::ops::Range;
+use enum_map::{enum_map, Enum, EnumMap};
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::collections::HashSet;
 
-#[derive(Debug, Clone, Copy, Eq, PartialEq, Hash)]
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Hash, Serialize, Deserialize)]
 enum Event {
-    SetOwner { new_owner_name: bool },
+    SetOwner { owner: bool },
     BecomeFriends { a: bool, b: bool },
 }
 
-#[derive(Debug, Clone, Copy, Eq, PartialEq, Hash)]
-struct Signature {
-    name: &'static str,
-}
+// #[derive(Debug, Clone, Copy, Eq, PartialEq, Hash)]
+// struct Signature {
+//     name: &'static str,
+// }
 
-#[derive(Debug, Default, Clone, PartialEq, Eq)]
+#[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
 struct EventGraph {
     happen: HashSet<Event>,
     before: HashSet<[Event; 2]>,
 }
-#[derive(Debug, Default, Clone, PartialEq, Eq)]
+#[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
 struct PartialEventGraph {
     depend: HashSet<Event>,
     event_graph: EventGraph,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct SignedEventGraph {
-    signatures: HashSet<Signature>,
-    partial_event_graph: PartialEventGraph,
-}
+// #[derive(Debug, Clone, PartialEq, Eq)]
+// struct SignedEventGraph {
+//     signatures: HashSet<Signature>,
+//     partial_event_graph: PartialEventGraph,
+// }
 
 #[derive(Clone, Debug, Default)]
 struct Situation {
@@ -53,6 +55,25 @@ fn pair_copy<A: Copy, B: Copy>((&a, &b): (&A, &B)) -> (A, B) {
     (a, b)
 }
 
+#[derive(Enum, Copy, Clone, Debug, Serialize, Deserialize)]
+enum Agent {
+    Amy,
+    Bob,
+    Dan,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+enum Task {
+    AddToHistory(EventGraph),
+    PrintHistory,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct Input {
+    agent: Agent,
+    task: Task,
+}
+
 //////////////
 impl<'a> BitAnd<&'a Self> for Situation {
     type Output = Option<Situation>;
@@ -72,22 +93,16 @@ impl<I: Iterator<Item = (Fact, bool)> + Clone> BitAnd<I> for Situation {
         Some(self)
     }
 }
-impl<'a, 'b> BitOr<&'a EventGraph> for &'b EventGraph {
-    type Output = EventGraph;
-    fn bitor(self, rhs: &EventGraph) -> EventGraph {
-        EventGraph {
-            happen: self.happen.union(&rhs.happen).copied().collect(),
-            before: self.before.union(&rhs.before).copied().collect(),
-        }
+impl<'a> BitOrAssign<&'a EventGraph> for EventGraph {
+    fn bitor_assign(&mut self, rhs: &Self) {
+        self.happen.extend(rhs.happen.iter().copied());
+        self.before.extend(rhs.before.iter().copied());
     }
 }
-impl<'a, 'b> BitOr<&'a PartialEventGraph> for &'b PartialEventGraph {
-    type Output = PartialEventGraph;
-    fn bitor(self, rhs: &PartialEventGraph) -> PartialEventGraph {
-        PartialEventGraph {
-            depend: self.depend.union(&rhs.depend).copied().collect(),
-            event_graph: &self.event_graph | &rhs.event_graph,
-        }
+impl<'a> BitOrAssign<&'a PartialEventGraph> for PartialEventGraph {
+    fn bitor_assign(&mut self, rhs: &Self) {
+        self.depend.extend(rhs.depend.iter().copied());
+        self.event_graph |= &rhs.event_graph;
     }
 }
 impl FactPattern {
@@ -120,14 +135,14 @@ impl Situation {
     pub fn try_delta(&self, event: Event) -> Option<Self> {
         let mut delta = Situation::default();
         match event {
-            Event::SetOwner { new_owner_name } => {
+            Event::SetOwner { owner } => {
                 delta.truth.extend(
                     self.query(FactPattern::from_slice(0b0, 0..1))
                         .map(|(fact, _value)| (fact, false)),
                 );
                 let fact = Fact::default()
                     .with(FactPattern::from_slice(0b0, 0..1))
-                    .with(FactPattern::from_slice(if new_owner_name { 1 } else { 0 }, 1..2));
+                    .with(FactPattern::from_slice(if owner { 1 } else { 0 }, 1..2));
                 delta.insert(fact, true);
             }
             Event::BecomeFriends { a, b } => {
@@ -143,19 +158,32 @@ impl Situation {
 }
 
 impl EventGraph {
-    fn transitively_close_happened(&mut self) {
+    // fn composed(mut self, other: &Self) -> Self {
+    //     self.happen.extend(other.happen.iter().copied());
+    //     self.before.extend(other.before.iter().copied());
+    //     self
+    // }
+    fn take_cycle(&self) -> Option<Event> {
+        let before_closed = Self::transitively_close_before(&self.happen, self.before.clone());
+        self.happen.iter().copied().find(|&event| before_closed.contains(&[event, event]))
+    }
+    fn transitively_close_before(
+        happen: &HashSet<Event>,
+        mut before: HashSet<[Event; 2]>,
+    ) -> HashSet<[Event; 2]> {
         'outer: loop {
-            for &[from, via] in self.before.iter() {
-                if !self.happen.contains(&from) || !self.happen.contains(&via) {
+            for &[from, via] in before.iter() {
+                if !happen.contains(&from) || !happen.contains(&via) {
                     continue;
                 }
-                for &to in self.happen.iter() {
-                    if self.before.contains(&[via, to]) && !self.before.contains(&[from, to]) {
-                        self.before.insert([from, to]);
+                for &to in happen.iter() {
+                    if before.contains(&[via, to]) && !before.contains(&[from, to]) {
+                        before.insert([from, to]);
                         continue 'outer;
                     }
                 }
             }
+            break before;
         }
     }
 }
@@ -177,3 +205,38 @@ impl Fact {
         self.bits & bit_mask(range_copy(&bit_range)) << bit_range.start
     }
 }
+
+pub fn run() {
+    let initial = EventGraph::default();
+    let mut agent_histories: EnumMap<Agent, EventGraph> = enum_map! {
+        Agent::Amy => initial.clone(),
+        Agent::Bob => initial.clone(),
+        Agent::Dan => initial.clone(),
+    };
+    let stdin = std::io::stdin();
+    let mut stdin_lock = stdin.lock();
+
+    let mut buffer = String::new();
+    loop {
+        use std::io::BufRead;
+        stdin_lock.read_line(&mut buffer).unwrap();
+        let got = ron::de::from_str::<Input>(&buffer);
+        println!("Got: {:#?}", &got);
+        buffer.clear();
+        match got {
+            Ok(Input { agent, task: Task::AddToHistory(event_graph) }) => {
+                agent_histories[agent] |= &event_graph;
+            }
+
+            Ok(Input { agent, task: Task::PrintHistory }) => {
+                println!("{:#?}", &agent_histories[agent]);
+            }
+            _ => {}
+        }
+    }
+}
+
+/*
+Input(agent:Amy, task:AddToHistory(EventGraph ( happen:[SetOwner(owner:false)], before:[])))
+Input(agent:Amy, task:PrintHistory)
+*/
