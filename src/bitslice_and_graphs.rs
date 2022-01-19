@@ -3,6 +3,7 @@ use core::ops::BitAnd;
 use core::ops::BitOrAssign;
 use core::ops::Range;
 use enum_map::{enum_map, Enum, EnumMap};
+use maplit::hashset;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::collections::HashSet;
@@ -304,10 +305,19 @@ pub fn run2() {
 }
 
 pub fn run() {
-    let mut arr = [0, 1, 2];
+    let [e0, e1, e2] = [
+        EventInstance { event: Event::SetOwner { owner: false }, index: 0 }, // noice
+        EventInstance { event: Event::SetOwner { owner: false }, index: 1 }, // noice
+        EventInstance { event: Event::SetOwner { owner: false }, index: 2 }, // noice
+    ];
+    let history = EventGraph { happen: hashset! {e0,e1,e2}, before: hashset! {[e0,e1], [e0,e2]} };
+    let closed_before = history.closed_before();
+    let mut arr: Vec<_> = history.happen.iter().copied().collect();
     let mut hp = HeapPermute::new(&mut arr);
     while let Some(arr) = hp.next() {
-        println!("{:?}", arr);
+        if closed_before.respected_by(arr) {
+            println!("arr {:#?}", arr);
+        }
     }
 }
 
