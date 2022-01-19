@@ -1,3 +1,4 @@
+use core::fmt::Debug;
 use core::hash::Hash;
 use core::ops::BitAnd;
 use core::ops::BitOrAssign;
@@ -5,7 +6,7 @@ use core::ops::Range;
 use enum_map::{enum_map, Enum, EnumMap};
 use maplit::hashset;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::collections::HashSet;
 
 struct HeapPermute<'a, T> {
@@ -82,14 +83,20 @@ struct PartialEventGraph {
 //     partial_event_graph: PartialEventGraph,
 // }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Default, Eq, PartialEq, Hash, Ord, PartialOrd)]
 struct Situation {
-    truth: HashMap<Fact, bool>,
+    truth: BTreeMap<Fact, bool>,
 }
 
-#[derive(Default, Clone, Copy, Debug, Eq, PartialEq, Hash)]
+#[derive(Default, Clone, Copy, Debug, Eq, PartialEq, Hash, Ord, PartialOrd)]
 struct Fact {
     pub bits: u32,
+}
+
+#[derive(Debug)]
+enum FactHr {
+    Owner { owner: bool },
+    Friend { a: bool, b: bool },
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
@@ -123,6 +130,28 @@ struct Input {
 }
 
 //////////////
+impl Into<FactHr> for Fact {
+    fn into(self) -> FactHr {
+        match self.read(0..1) {
+            0 => FactHr::Owner { owner: self.read(1..2) == 1 },
+            1 => FactHr::Friend { a: self.read(1..2) == 1, b: self.read(2..3) == 1 },
+            _ => unreachable!(),
+        }
+    }
+}
+impl Into<Fact> for FactHr {
+    fn into(self) -> Fact {
+        match self {
+            FactHr::Owner { owner } => Fact::default()
+                .with(FactPattern::from_slice(0b0, 0..1))
+                .with(FactPattern::from_slice(if owner { 1 } else { 0 }, 1..2)),
+            FactHr::Friend { a, b } => Fact::default()
+                .with(FactPattern::from_slice(0b1, 0..1))
+                .with(FactPattern::from_slice(if a { 1 } else { 0 }, 1..2))
+                .with(FactPattern::from_slice(if b { 1 } else { 0 }, 2..3)),
+        }
+    }
+}
 impl<'a> BitAnd<&'a Self> for Situation {
     type Output = Option<Situation>;
     fn bitand(self, rhs: &Self) -> Option<Situation> {
@@ -154,20 +183,26 @@ impl<'a> BitOrAssign<&'a PartialEventGraph> for PartialEventGraph {
     }
 }
 impl FactPattern {
-    const fn from_slice(bits: u32, bit_range: Range<u8>) -> Self {
+    fn from_slice(bits: u32, bit_range: Range<u8>) -> Self {
         let mask = bit_mask(range_copy(&bit_range));
+        println!("mask {:b}", mask);
         Self { fact: Fact { bits: (bits << bit_range.start) & mask }, mask }
     }
 }
 const fn bit_mask(range: Range<u8>) -> u32 {
     let from_start = !0 << range.start;
     let to_end = !0 << range.end;
-    from_start & to_end
+    !(from_start & to_end)
 }
 const fn range_copy(range: &Range<u8>) -> Range<u8> {
     range.start..range.end
 }
 impl Situation {
+    pub fn update(&mut self, rhs: &Self) {
+        for (&fact, &value) in rhs.truth.iter() {
+            self.truth.insert(fact, value);
+        }
+    }
     pub fn insert(&mut self, fact: Fact, value: bool) -> Option<bool> {
         self.truth.insert(fact, value)
     }
@@ -182,23 +217,17 @@ impl Situation {
     }
     pub fn try_delta(&self, event: Event) -> Option<Self> {
         let mut delta = Situation::default();
+        println!("delta for event {:?}", event);
         match event {
             Event::SetOwner { owner } => {
                 delta.truth.extend(
                     self.query(FactPattern::from_slice(0b0, 0..1))
                         .map(|(fact, _value)| (fact, false)),
                 );
-                let fact = Fact::default()
-                    .with(FactPattern::from_slice(0b0, 0..1))
-                    .with(FactPattern::from_slice(if owner { 1 } else { 0 }, 1..2));
-                delta.insert(fact, true);
+                delta.insert(FactHr::Owner { owner }.into(), true);
             }
             Event::BecomeFriends { a, b } => {
-                let fact = Fact::default()
-                    .with(FactPattern::from_slice(0b1, 0..1))
-                    .with(FactPattern::from_slice(if a { 1 } else { 0 }, 1..2))
-                    .with(FactPattern::from_slice(if b { 1 } else { 0 }, 2..3));
-                delta.insert(fact, true);
+                delta.insert(FactHr::Friend { a, b }.into(), true);
             }
         }
         Some(delta)
@@ -244,6 +273,13 @@ impl EventGraph {
         }
     }
 }
+impl Debug for Situation {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> Result<(), std::fmt::Error> {
+        f.debug_map()
+            .entries(self.truth.iter().map(|(&k, v)| (Into::<FactHr>::into(k), v)))
+            .finish()
+    }
+}
 impl PartialEventGraph {
     fn is_complete(&self) -> bool {
         self.depend.is_subset(&self.event_graph.happen)
@@ -259,7 +295,7 @@ impl Fact {
         self
     }
     pub const fn read(self, bit_range: Range<u8>) -> u32 {
-        self.bits & bit_mask(range_copy(&bit_range)) << bit_range.start
+        (self.bits & bit_mask(range_copy(&bit_range))) >> bit_range.start
     }
 }
 
@@ -305,20 +341,34 @@ pub fn run2() {
 }
 
 pub fn run() {
+    let init = Situation::default();
     let [e0, e1, e2] = [
         EventInstance { event: Event::SetOwner { owner: false }, index: 0 }, // noice
         EventInstance { event: Event::SetOwner { owner: false }, index: 1 }, // noice
-        EventInstance { event: Event::SetOwner { owner: false }, index: 2 }, // noice
+        EventInstance { event: Event::SetOwner { owner: true }, index: 2 },  // noice
     ];
     let history = EventGraph { happen: hashset! {e0,e1,e2}, before: hashset! {[e0,e1], [e0,e2]} };
     let closed_before = history.closed_before();
     let mut arr: Vec<_> = history.happen.iter().copied().collect();
     let mut hp = HeapPermute::new(&mut arr);
+    let mut eq_classes = BTreeMap::<Situation, Vec<EventInstance>>::default();
     while let Some(arr) = hp.next() {
         if closed_before.respected_by(arr) {
             println!("arr {:#?}", arr);
+            let mut sit = init.clone();
+            for ei in arr {
+                let delta = sit.try_delta(ei.event).unwrap();
+                println!("delta now {:?}", &delta);
+                sit.update(&delta);
+                println!("sit now {:?}", &sit);
+            }
+            println!("END SIT {:#?}", &sit);
+            if !eq_classes.contains_key(&sit) {
+                eq_classes.insert(sit, arr.to_vec());
+            }
         }
     }
+    println!("---------\n{:#?}", eq_classes);
 }
 
 /*
