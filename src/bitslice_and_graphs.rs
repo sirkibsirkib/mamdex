@@ -1,3 +1,5 @@
+use core::ops::BitAnd;
+use core::ops::BitOr;
 use core::ops::Range;
 use std::collections::HashMap;
 use std::collections::HashSet;
@@ -47,6 +49,42 @@ fn pair_copy<A: Copy, B: Copy>((&a, &b): (&A, &B)) -> (A, B) {
 }
 
 //////////////
+impl<'a> BitAnd<&'a Self> for Situation {
+    type Output = Option<Situation>;
+    fn bitand(self, rhs: &Self) -> Option<Situation> {
+        self.bitand(rhs.truth.iter().map(pair_copy))
+    }
+}
+impl<I: Iterator<Item = (Fact, bool)> + Clone> BitAnd<I> for Situation {
+    type Output = Option<Situation>;
+    fn bitand(mut self, rhs: I) -> Option<Situation> {
+        for (fact, value) in rhs {
+            let was = self.truth.insert(fact, value);
+            if was != Some(value) {
+                return None;
+            }
+        }
+        Some(self)
+    }
+}
+impl<'a, 'b> BitOr<&'a EventGraph> for &'b EventGraph {
+    type Output = EventGraph;
+    fn bitor(self, rhs: &EventGraph) -> EventGraph {
+        EventGraph {
+            happen: self.happen.union(&rhs.happen).copied().collect(),
+            before: self.before.union(&rhs.before).copied().collect(),
+        }
+    }
+}
+impl<'a, 'b> BitOr<&'a PartialEventGraph> for &'b PartialEventGraph {
+    type Output = PartialEventGraph;
+    fn bitor(self, rhs: &PartialEventGraph) -> PartialEventGraph {
+        PartialEventGraph {
+            depend: self.depend.union(&rhs.depend).copied().collect(),
+            event_graph: &self.event_graph | &rhs.event_graph,
+        }
+    }
+}
 impl FactPattern {
     const fn from_slice(bits: u32, bit_range: Range<u8>) -> Self {
         let mask = bit_mask(range_copy(&bit_range));
@@ -62,26 +100,6 @@ const fn range_copy(range: &Range<u8>) -> Range<u8> {
     range.start..range.end
 }
 impl Situation {
-    fn try_union(&self, other: &Self) -> Option<Self> {
-        let mut new = self.clone();
-        new.consistent_insert_all(other.truth.iter().map(pair_copy))?;
-        Some(new)
-    }
-    fn consistent_insert_all(
-        &mut self,
-        it: impl Iterator<Item = (Fact, bool)> + Clone,
-    ) -> Option<()> {
-        // check for inconsistencies
-        for (fact, value) in it.clone() {
-            if self.truth.get(&fact).copied() == Some(!value) {
-                return None;
-            }
-        }
-        for (fact, value) in it.clone() {
-            self.truth.insert(fact, value);
-        }
-        Some(())
-    }
     pub fn insert(&mut self, fact: Fact, value: bool) -> Option<bool> {
         self.truth.insert(fact, value)
     }
@@ -134,6 +152,11 @@ impl EventGraph {
                 }
             }
         }
+    }
+}
+impl PartialEventGraph {
+    fn is_complete(&self) -> bool {
+        self.depend.is_subset(&self.event_graph.happen)
     }
 }
 impl Fact {
