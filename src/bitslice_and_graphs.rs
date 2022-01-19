@@ -253,6 +253,32 @@ impl EventGraph {
     fn closed_before(&self) -> ClosedOrder {
         ClosedOrder { before: Self::transitively_close_before(&self.happen, self.before.clone()) }
     }
+    fn destinations(
+        &self,
+        initial_situation: &Situation,
+    ) -> BTreeMap<Situation, Vec<EventInstance>> {
+        let mut eq_classes = BTreeMap::<Situation, Vec<EventInstance>>::default();
+        let closed_before = self.closed_before();
+        let mut arr: Vec<_> = self.happen.iter().copied().collect();
+        let mut hp = HeapPermute::new(&mut arr);
+        while let Some(arr) = hp.next() {
+            if closed_before.respected_by(arr) {
+                // println!("arr {:#?}", arr);
+                let mut sit = initial_situation.clone();
+                for ei in arr {
+                    let delta = sit.try_delta(ei.event).unwrap();
+                    // println!("delta now {:?}", &delta);
+                    sit.update(&delta);
+                    // println!("sit now {:?}", &sit);
+                }
+                // println!("END SIT {:#?}", &sit);
+                if !eq_classes.contains_key(&sit) {
+                    eq_classes.insert(sit, arr.to_vec());
+                }
+            }
+        }
+        eq_classes
+    }
     fn transitively_close_before(
         happen: &HashSet<EventInstance>,
         mut before: HashSet<[EventInstance; 2]>,
@@ -300,11 +326,12 @@ impl Fact {
 }
 
 pub fn run2() {
-    let initial = EventGraph::default();
+    let initial_situation = Situation::default();
+    let initial_history = EventGraph::default();
     let mut agent_histories: EnumMap<Agent, EventGraph> = enum_map! {
-        Agent::Amy => initial.clone(),
-        Agent::Bob => initial.clone(),
-        Agent::Dan => initial.clone(),
+        Agent::Amy => initial_history.clone(),
+        Agent::Bob => initial_history.clone(),
+        Agent::Dan => initial_history.clone(),
     };
     let stdin = std::io::stdin();
     let mut stdin_lock = stdin.lock();
@@ -325,15 +352,7 @@ pub fn run2() {
                 println!("{:#?}", &agent_histories[agent]);
             }
             Ok(Input { agent, task: Task::CurrentSituations }) => {
-                let h = &agent_histories[agent];
-                let mut happen_vec: Vec<_> = h.happen.iter().copied().collect();
-                let closed_before = h.closed_before();
-                let mut hp = HeapPermute::new(&mut happen_vec);
-                while let Some(arr) = hp.next() {
-                    if closed_before.respected_by(arr) {
-                        println!("arr {:?}", arr);
-                    }
-                }
+                println!("{:#?}", agent_histories[agent].destinations(&initial_situation));
             }
             _ => {}
         }
@@ -341,34 +360,14 @@ pub fn run2() {
 }
 
 pub fn run() {
-    let init = Situation::default();
+    let initial_situation = Situation::default();
     let [e0, e1, e2] = [
         EventInstance { event: Event::SetOwner { owner: false }, index: 0 }, // noice
         EventInstance { event: Event::SetOwner { owner: false }, index: 1 }, // noice
         EventInstance { event: Event::SetOwner { owner: true }, index: 2 },  // noice
     ];
     let history = EventGraph { happen: hashset! {e0,e1,e2}, before: hashset! {[e0,e1], [e0,e2]} };
-    let closed_before = history.closed_before();
-    let mut arr: Vec<_> = history.happen.iter().copied().collect();
-    let mut hp = HeapPermute::new(&mut arr);
-    let mut eq_classes = BTreeMap::<Situation, Vec<EventInstance>>::default();
-    while let Some(arr) = hp.next() {
-        if closed_before.respected_by(arr) {
-            println!("arr {:#?}", arr);
-            let mut sit = init.clone();
-            for ei in arr {
-                let delta = sit.try_delta(ei.event).unwrap();
-                println!("delta now {:?}", &delta);
-                sit.update(&delta);
-                println!("sit now {:?}", &sit);
-            }
-            println!("END SIT {:#?}", &sit);
-            if !eq_classes.contains_key(&sit) {
-                eq_classes.insert(sit, arr.to_vec());
-            }
-        }
-    }
-    println!("---------\n{:#?}", eq_classes);
+    println!("{:#?}", history.destinations(&initial_situation));
 }
 
 /*
