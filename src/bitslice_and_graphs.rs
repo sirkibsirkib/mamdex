@@ -7,6 +7,48 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::collections::HashSet;
 
+struct HeapPermute<'a, T> {
+    arr: &'a mut [T],
+    i: usize,
+    n: usize,
+    c: Vec<usize>,
+}
+impl<'a, T> HeapPermute<'a, T> {
+    /// https://en.wikipedia.org/wiki/Heap%27s_algorithm
+    fn new(arr: &'a mut [T]) -> Self {
+        assert!(arr.len() < usize::MAX);
+        Self { n: usize::MAX, c: std::iter::repeat(0).take(arr.len()).collect(), i: 0, arr }
+    }
+    fn next(&mut self) -> Option<&[T]> {
+        if self.n == usize::MAX {
+            self.n = self.arr.len();
+            return Some(self.arr);
+        }
+        while self.i < self.n {
+            if self.c[self.i] < self.i {
+                if self.i % 2 == 0 {
+                    self.arr.swap(0, self.i);
+                } else {
+                    self.arr.swap(self.c[self.i], self.i);
+                }
+                self.c[self.i] += 1;
+                self.i = 0;
+                return Some(self.arr);
+            } else {
+                self.c[self.i] = 0;
+                self.i += 1;
+            }
+        }
+        None
+    }
+}
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Hash, Serialize, Deserialize)]
+struct EventInstance {
+    event: Event,
+    index: u32,
+}
+
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Hash, Serialize, Deserialize)]
 enum Event {
     SetOwner { owner: bool },
@@ -18,14 +60,18 @@ enum Event {
 //     name: &'static str,
 // }
 
+struct ClosedOrder {
+    before: HashSet<[EventInstance; 2]>,
+}
+
 #[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
 struct EventGraph {
-    happen: HashSet<Event>,
-    before: HashSet<[Event; 2]>,
+    happen: HashSet<EventInstance>,
+    before: HashSet<[EventInstance; 2]>,
 }
 #[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
 struct PartialEventGraph {
-    depend: HashSet<Event>,
+    depend: HashSet<EventInstance>,
     event_graph: EventGraph,
 }
 
@@ -66,6 +112,7 @@ enum Agent {
 enum Task {
     AddToHistory(EventGraph),
     PrintHistory,
+    CurrentSituations,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -157,20 +204,29 @@ impl Situation {
     }
 }
 
+impl ClosedOrder {
+    fn respected_by(&self, arr: &[EventInstance]) -> bool {
+        for window in arr.windows(2) {
+            if let &[a, b] = window {
+                if self.before.contains(&[b, a]) {
+                    return false;
+                }
+            }
+        }
+        true
+    }
+    fn take_cycle(&self, happen: &HashSet<EventInstance>) -> Option<EventInstance> {
+        happen.iter().copied().find(|&x| self.before.contains(&[x, x]))
+    }
+}
 impl EventGraph {
-    // fn composed(mut self, other: &Self) -> Self {
-    //     self.happen.extend(other.happen.iter().copied());
-    //     self.before.extend(other.before.iter().copied());
-    //     self
-    // }
-    fn take_cycle(&self) -> Option<Event> {
-        let before_closed = Self::transitively_close_before(&self.happen, self.before.clone());
-        self.happen.iter().copied().find(|&event| before_closed.contains(&[event, event]))
+    fn closed_before(&self) -> ClosedOrder {
+        ClosedOrder { before: Self::transitively_close_before(&self.happen, self.before.clone()) }
     }
     fn transitively_close_before(
-        happen: &HashSet<Event>,
-        mut before: HashSet<[Event; 2]>,
-    ) -> HashSet<[Event; 2]> {
+        happen: &HashSet<EventInstance>,
+        mut before: HashSet<[EventInstance; 2]>,
+    ) -> HashSet<[EventInstance; 2]> {
         'outer: loop {
             for &[from, via] in before.iter() {
                 if !happen.contains(&from) || !happen.contains(&via) {
@@ -206,7 +262,7 @@ impl Fact {
     }
 }
 
-pub fn run() {
+pub fn run2() {
     let initial = EventGraph::default();
     let mut agent_histories: EnumMap<Agent, EventGraph> = enum_map! {
         Agent::Amy => initial.clone(),
@@ -231,8 +287,27 @@ pub fn run() {
             Ok(Input { agent, task: Task::PrintHistory }) => {
                 println!("{:#?}", &agent_histories[agent]);
             }
+            Ok(Input { agent, task: Task::CurrentSituations }) => {
+                let h = &agent_histories[agent];
+                let mut happen_vec: Vec<_> = h.happen.iter().copied().collect();
+                let closed_before = h.closed_before();
+                let mut hp = HeapPermute::new(&mut happen_vec);
+                while let Some(arr) = hp.next() {
+                    if closed_before.respected_by(arr) {
+                        println!("arr {:?}", arr);
+                    }
+                }
+            }
             _ => {}
         }
+    }
+}
+
+pub fn run() {
+    let mut arr = [0, 1, 2];
+    let mut hp = HeapPermute::new(&mut arr);
+    while let Some(arr) = hp.next() {
+        println!("{:?}", arr);
     }
 }
 
