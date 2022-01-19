@@ -1,3 +1,4 @@
+use core::hash::Hash;
 use core::ops::BitAnd;
 use core::ops::BitOr;
 use core::ops::Range;
@@ -10,21 +11,25 @@ enum Event {
     BecomeFriends { a: bool, b: bool },
 }
 
-#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Hash)]
 struct Signature {
     name: &'static str,
 }
 
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
 struct EventGraph {
     happen: HashSet<Event>,
     before: HashSet<[Event; 2]>,
 }
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
 struct PartialEventGraph {
     depend: HashSet<Event>,
     event_graph: EventGraph,
 }
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 struct SignedEventGraph {
-    signatures: Vec<Signature>,
+    signatures: HashSet<Signature>,
     partial_event_graph: PartialEventGraph,
 }
 
