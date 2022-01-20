@@ -1,13 +1,7 @@
-use core::fmt::Debug;
-use core::hash::Hash;
-use core::ops::BitAnd;
-use core::ops::BitOrAssign;
-use core::ops::Range;
+use core::{fmt::Debug, hash::Hash, ops::Range};
 use enum_map::{enum_map, Enum, EnumMap};
-use maplit::hashset;
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 
 struct HeapPermute<'a, T> {
     arr: &'a mut [T],
@@ -57,11 +51,6 @@ enum Event {
     BecomeFriends { a: bool, b: bool },
 }
 
-// #[derive(Debug, Clone, Copy, Eq, PartialEq, Hash)]
-// struct Signature {
-//     name: &'static str,
-// }
-
 struct ClosedOrder {
     before: HashSet<[EventInstance; 2]>,
 }
@@ -76,12 +65,6 @@ struct PartialEventGraph {
     depend: HashSet<EventInstance>,
     event_graph: EventGraph,
 }
-
-// #[derive(Debug, Clone, PartialEq, Eq)]
-// struct SignedEventGraph {
-//     signatures: HashSet<Signature>,
-//     partial_event_graph: PartialEventGraph,
-// }
 
 #[derive(Clone, Default, Eq, PartialEq, Hash, Ord, PartialOrd)]
 struct Situation {
@@ -157,36 +140,6 @@ impl Into<Fact> for FactHr {
         }
     }
 }
-// impl<'a> BitAnd<&'a Self> for Situation {
-//     type Output = Option<Situation>;
-//     fn bitand(self, rhs: &Self) -> Option<Situation> {
-//         self.bitand(rhs.truth.iter().map(pair_copy))
-//     }
-// }
-// impl<I: Iterator<Item = (Fact, bool)> + Clone> BitAnd<I> for Situation {
-//     type Output = Option<Situation>;
-//     fn bitand(mut self, rhs: I) -> Option<Situation> {
-//         for (fact, value) in rhs {
-//             let was = self.truth.insert(fact, value);
-//             if was != Some(value) {
-//                 return None;
-//             }
-//         }
-//         Some(self)
-//     }
-// }
-// impl<'a> BitOrAssign<&'a EventGraph> for EventGraph {
-//     fn bitor_assign(&mut self, rhs: &Self) {
-//         self.happen.extend(rhs.happen.iter().copied());
-//         self.before.extend(rhs.before.iter().copied());
-//     }
-// }
-// impl<'a> BitOrAssign<&'a PartialEventGraph> for PartialEventGraph {
-//     fn bitor_assign(&mut self, rhs: &Self) {
-//         self.depend.extend(rhs.depend.iter().copied());
-//         self.event_graph |= &rhs.event_graph;
-//     }
-// }
 impl FactPattern {
     fn from_slice(bits: u32, bit_range: Range<u8>) -> Self {
         let mask = bit_mask(range_copy(&bit_range));
@@ -274,15 +227,11 @@ impl EventGraph {
         let mut hp = HeapPermute::new(&mut arr);
         while let Some(arr) = hp.next() {
             if closed_before.respected_by(arr) {
-                // println!("arr {:#?}", arr);
                 let mut sit = initial_situation.clone();
                 for ei in arr {
                     let delta = sit.try_delta(ei.event).unwrap();
-                    // println!("delta now {:?}", &delta);
                     sit.update(&delta);
-                    // println!("sit now {:?}", &sit);
                 }
-                // println!("END SIT {:#?}", &sit);
                 if !eq_classes.contains_key(&sit) {
                     eq_classes.insert(sit, arr.to_vec());
                 }
