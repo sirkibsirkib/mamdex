@@ -124,7 +124,16 @@ enum Task {
     GlobalHistoryPrint,
     GlobalDestinationsPrint,
 }
-
+trait Compose<T> {
+    fn compose(&mut self, rhs: &T);
+    fn composed(mut self, rhs: &T) -> Self
+    where
+        Self: Sized,
+    {
+        self.compose(rhs);
+        self
+    }
+}
 //////////////
 impl Into<FactHr> for Fact {
     fn into(self) -> FactHr {
@@ -148,36 +157,36 @@ impl Into<Fact> for FactHr {
         }
     }
 }
-impl<'a> BitAnd<&'a Self> for Situation {
-    type Output = Option<Situation>;
-    fn bitand(self, rhs: &Self) -> Option<Situation> {
-        self.bitand(rhs.truth.iter().map(pair_copy))
-    }
-}
-impl<I: Iterator<Item = (Fact, bool)> + Clone> BitAnd<I> for Situation {
-    type Output = Option<Situation>;
-    fn bitand(mut self, rhs: I) -> Option<Situation> {
-        for (fact, value) in rhs {
-            let was = self.truth.insert(fact, value);
-            if was != Some(value) {
-                return None;
-            }
-        }
-        Some(self)
-    }
-}
-impl<'a> BitOrAssign<&'a EventGraph> for EventGraph {
-    fn bitor_assign(&mut self, rhs: &Self) {
-        self.happen.extend(rhs.happen.iter().copied());
-        self.before.extend(rhs.before.iter().copied());
-    }
-}
-impl<'a> BitOrAssign<&'a PartialEventGraph> for PartialEventGraph {
-    fn bitor_assign(&mut self, rhs: &Self) {
-        self.depend.extend(rhs.depend.iter().copied());
-        self.event_graph |= &rhs.event_graph;
-    }
-}
+// impl<'a> BitAnd<&'a Self> for Situation {
+//     type Output = Option<Situation>;
+//     fn bitand(self, rhs: &Self) -> Option<Situation> {
+//         self.bitand(rhs.truth.iter().map(pair_copy))
+//     }
+// }
+// impl<I: Iterator<Item = (Fact, bool)> + Clone> BitAnd<I> for Situation {
+//     type Output = Option<Situation>;
+//     fn bitand(mut self, rhs: I) -> Option<Situation> {
+//         for (fact, value) in rhs {
+//             let was = self.truth.insert(fact, value);
+//             if was != Some(value) {
+//                 return None;
+//             }
+//         }
+//         Some(self)
+//     }
+// }
+// impl<'a> BitOrAssign<&'a EventGraph> for EventGraph {
+//     fn bitor_assign(&mut self, rhs: &Self) {
+//         self.happen.extend(rhs.happen.iter().copied());
+//         self.before.extend(rhs.before.iter().copied());
+//     }
+// }
+// impl<'a> BitOrAssign<&'a PartialEventGraph> for PartialEventGraph {
+//     fn bitor_assign(&mut self, rhs: &Self) {
+//         self.depend.extend(rhs.depend.iter().copied());
+//         self.event_graph |= &rhs.event_graph;
+//     }
+// }
 impl FactPattern {
     fn from_slice(bits: u32, bit_range: Range<u8>) -> Self {
         let mask = bit_mask(range_copy(&bit_range));
@@ -245,6 +254,12 @@ impl ClosedOrder {
         happen.iter().copied().find(|&x| self.before.contains(&[x, x]))
     }
 }
+impl Compose<Self> for EventGraph {
+    fn compose(&mut self, rhs: &Self) {
+        self.happen.extend(rhs.happen.iter().copied());
+        self.before.extend(rhs.before.iter().copied());
+    }
+}
 impl EventGraph {
     fn closed_before(&self) -> ClosedOrder {
         ClosedOrder { before: Self::transitively_close_before(&self.happen, self.before.clone()) }
@@ -302,6 +317,12 @@ impl Debug for Situation {
             .finish()
     }
 }
+impl Compose<Self> for PartialEventGraph {
+    fn compose(&mut self, rhs: &Self) {
+        self.depend.extend(rhs.depend.iter().copied());
+        self.event_graph.compose(&rhs.event_graph);
+    }
+}
 impl PartialEventGraph {
     fn is_complete(&self) -> bool {
         self.depend.is_subset(&self.event_graph.happen)
@@ -340,30 +361,26 @@ pub fn repl() {
         println!("Got: {:#?}", &got);
         buffer.clear();
         match got {
-            Ok(Task::AgentHistoryAdd { agent, graph }) => agent_histories[agent] |= &graph,
+            Ok(Task::AgentHistoryAdd { agent, graph }) => agent_histories[agent].compose(&graph),
             Ok(Task::AgentHistoryPrint { agent }) => println!("{:#?}", &agent_histories[agent]),
             Ok(Task::AgentDestinationsPrint { agent }) => {
-                println!("{:#?}", agent_histories[agent].destinations(&initial_situation))
+                let destinations = agent_histories[agent].destinations(&initial_situation);
+                println!("{:#?}", &destinations);
             }
-            Ok(Task::GlobalHistoryPrint) => todo!(),
-            Ok(Task::GlobalDestinationsPrint) => todo!(),
+            Ok(Task::GlobalHistoryPrint) => {
+                let global = agent_histories
+                    .values()
+                    .fold(EventGraph::default(), |global, local| global.composed(local));
+                println!("{:#?}", &global);
+            }
+            Ok(Task::GlobalDestinationsPrint) => {
+                let global = agent_histories
+                    .values()
+                    .fold(EventGraph::default(), |global, local| global.composed(local));
+                let destinations = global.destinations(&initial_situation);
+                println!("{:#?}", &destinations);
+            }
             Err(_) => {}
         }
     }
 }
-
-pub fn run() {
-    let initial_situation = Situation::default();
-    let [e0, e1, e2] = [
-        EventInstance { event: Event::SetOwner { owner: false }, index: 0 }, // noice
-        EventInstance { event: Event::SetOwner { owner: false }, index: 1 }, // noice
-        EventInstance { event: Event::SetOwner { owner: true }, index: 2 },  // noice
-    ];
-    let history = EventGraph { happen: hashset! {e0,e1,e2}, before: hashset! {[e0,e1], [e0,e2]} };
-    println!("{:#?}", history.destinations(&initial_situation));
-}
-
-/*
-Input(agent:Amy, task:AddToHistory(EventGraph ( happen:[SetOwner(owner:false)], before:[])))
-Input(agent:Amy, task:PrintHistory)
-*/
