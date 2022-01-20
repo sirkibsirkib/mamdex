@@ -3,6 +3,97 @@ use enum_map::{enum_map, Enum, EnumMap};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashSet};
 
+const KIND_BITS_LEN: u8 = 2;
+const KIND_METAS: &'static [FactKindMeta] = &[
+    FactKindMeta {
+        kind_name: "owner",
+        field_metas: &[FactFieldMeta { field_name: "owner", bits_len: 2 }],
+    },
+    FactKindMeta {
+        kind_name: "friend",
+        field_metas: &[
+            FactFieldMeta { field_name: "a", bits_len: 2 },
+            FactFieldMeta { field_name: "b", bits_len: 2 },
+        ],
+    },
+];
+
+struct FactFieldMeta {
+    field_name: &'static str,
+    bits_len: u8,
+}
+
+#[derive(Clone, Copy)]
+struct FactKindMeta {
+    kind_name: &'static str,
+    field_metas: &'static [FactFieldMeta],
+}
+
+struct FactHr(Fact);
+
+impl Debug for FactHr {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        let fkm = KIND_METAS[self.0.read(0..KIND_BITS_LEN) as usize];
+        let mut ds = f.debug_struct("FactHr");
+        let mut offset = KIND_BITS_LEN;
+        ds.field("kind", &fkm.kind_name);
+        for field_meta in fkm.field_metas {
+            let new_offset = offset + field_meta.bits_len;
+            ds.field(field_meta.field_name, &self.0.read(offset..new_offset));
+            offset = new_offset;
+        }
+        ds.finish()
+    }
+}
+impl Fact {
+    fn pack(kind_idx: u8, field_bits: &[u32]) -> Self {
+        let fkm = KIND_METAS[kind_idx as usize];
+        let mut fact = Self::default();
+        fact.write(FactPattern::from_bit_slice(kind_idx as u32, 0..KIND_BITS_LEN));
+        let mut offset = KIND_BITS_LEN;
+        for (&field_bits, field_meta) in field_bits.iter().zip(fkm.field_metas) {
+            let new_offset = offset + field_meta.bits_len;
+            fact.write(FactPattern::from_bit_slice(field_bits as u32, offset..new_offset));
+            offset = new_offset;
+        }
+        fact
+    }
+}
+
+// struct HrFact {
+//     kind_idx: u8,
+//     field_bits: Vec<u32>,
+// }
+// impl HrFact {
+//     fn pack(&self) -> Fact {
+//         let fkm = Self::KIND_METAS[self.kind_idx as usize];
+//         let mut fact = Fact::default();
+//         let mut offset = 0u8;
+//         let mut push_bits = |bits: u32, len: u8| {
+//             let new_offset = offset + len;
+//             fact.write(FactPattern::from_bit_slice(bits, offset..new_offset));
+//             offset = new_offset;
+//         };
+//         push_bits(self.kind_idx as u32, Self::KIND_LEN);
+//         for (&bits, field_meta) in self.field_bits.iter().zip(fkm.field_metas.iter()) {
+//             push_bits(bits, field_meta.bits_len);
+//         }
+//         fact
+//     }
+//     fn unpack(fact: Fact) -> Self {
+//         let kind_idx = fact.read(0..Self::KIND_LEN) as u8;
+//         let fkm = Self::KIND_METAS[kind_idx as usize];
+//         let mut offset = 0;
+//         let mut field_bits = vec![];
+//         for field_meta in fkm.field_metas.iter() {
+//             let new_offset = offset + field_meta.bits_len;
+//             field_bits.push(fact.read(offset..new_offset));
+//             offset = new_offset;
+//         }
+//         Self { kind_idx, field_bits }
+//     }
+// }
+
 struct HeapPermute<'a, T> {
     arr: &'a mut [T],
     i: usize,
@@ -47,8 +138,8 @@ struct EventInstance {
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Hash, Serialize, Deserialize)]
 enum Event {
-    SetOwner { owner: bool },
-    BecomeFriends { a: bool, b: bool },
+    SetOwner { owner: u32 },
+    BecomeFriends { a: u32, b: u32 },
 }
 
 struct ClosedOrder {
@@ -71,16 +162,16 @@ struct Situation {
     truth: BTreeMap<Fact, bool>,
 }
 
-#[derive(Default, Clone, Copy, Debug, Eq, PartialEq, Hash, Ord, PartialOrd)]
+#[derive(Debug, Default, Clone, Copy, Eq, PartialEq, Hash, Ord, PartialOrd)]
 struct Fact {
     pub bits: u32,
 }
 
-#[derive(Debug)]
-enum FactHr {
-    Owner { owner: bool },
-    Friend { a: bool, b: bool },
-}
+// #[derive(Debug)]
+// enum FactHr {
+//     Owner { owner: u32 },
+//     Friend { a: u32, b: u32 },
+// }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
 struct FactPattern {
@@ -118,32 +209,32 @@ trait Compose<T> {
     }
 }
 //////////////
-impl Into<FactHr> for Fact {
-    fn into(self) -> FactHr {
-        match self.read(0..1) {
-            0 => FactHr::Owner { owner: self.read(1..2) == 1 },
-            1 => FactHr::Friend { a: self.read(1..2) == 1, b: self.read(2..3) == 1 },
-            _ => unreachable!(),
-        }
-    }
-}
-impl Into<Fact> for FactHr {
-    fn into(self) -> Fact {
-        match self {
-            FactHr::Owner { owner } => Fact::default()
-                .with(FactPattern::from_slice(0b0, 0..1))
-                .with(FactPattern::from_slice(if owner { 1 } else { 0 }, 1..2)),
-            FactHr::Friend { a, b } => Fact::default()
-                .with(FactPattern::from_slice(0b1, 0..1))
-                .with(FactPattern::from_slice(if a { 1 } else { 0 }, 1..2))
-                .with(FactPattern::from_slice(if b { 1 } else { 0 }, 2..3)),
-        }
-    }
-}
+// impl Into<FactHr> for Fact {
+//     fn into(self) -> FactHr {
+//         match self.read(0..1) {
+//             0 => FactHr::Owner { owner: self.read(1..2) },
+//             1 => FactHr::Friend { a: self.read(1..2), b: self.read(2..3) },
+//             _ => unreachable!(),
+//         }
+//     }
+// }
+// impl Into<Fact> for FactHr {
+//     fn into(self) -> Fact {
+//         match self {
+//             FactHr::Owner { owner } => Fact::default()
+//                 .with(FactPattern::from_bit_slice(0b0, 0..1))
+//                 .with(FactPattern::from_bit_slice(owner, 1..2)),
+//             FactHr::Friend { a, b } => Fact::default()
+//                 .with(FactPattern::from_bit_slice(0b1, 0..1))
+//                 .with(FactPattern::from_bit_slice(a, 1..2))
+//                 .with(FactPattern::from_bit_slice(b, 2..3)),
+//         }
+//     }
+// }
 impl FactPattern {
-    fn from_slice(bits: u32, bit_range: Range<u8>) -> Self {
+    fn from_bit_slice(bits: u32, bit_range: Range<u8>) -> Self {
         let mask = bit_mask(range_copy(&bit_range));
-        println!("mask {:b}", mask);
+        // println!("mask {:b}", mask);
         Self { fact: Fact { bits: (bits << bit_range.start) & mask }, mask }
     }
 }
@@ -175,17 +266,17 @@ impl Situation {
     }
     pub fn try_delta(&self, event: Event) -> Option<Self> {
         let mut delta = Situation::default();
-        println!("delta for event {:?}", event);
+        // println!("delta for event {:?}", event);
         match event {
             Event::SetOwner { owner } => {
                 delta.truth.extend(
-                    self.query(FactPattern::from_slice(0b0, 0..1))
+                    self.query(FactPattern::from_bit_slice(0b0, 0..1))
                         .map(|(fact, _value)| (fact, false)),
                 );
-                delta.insert(FactHr::Owner { owner }.into(), true);
+                delta.insert(Fact::pack(0, &[owner]), true);
             }
             Event::BecomeFriends { a, b } => {
-                delta.insert(FactHr::Friend { a, b }.into(), true);
+                delta.insert(Fact::pack(1, &[a, b]), true);
             }
         }
         Some(delta)
@@ -260,9 +351,22 @@ impl EventGraph {
     }
 }
 impl Debug for Situation {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> Result<(), std::fmt::Error> {
-        f.debug_map()
-            .entries(self.truth.iter().map(|(&k, v)| (Into::<FactHr>::into(k), v)))
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        struct Filtered<'a>(&'a Situation, bool);
+        impl Debug for Filtered<'_> {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                let iter = self
+                    .0
+                    .truth
+                    .iter()
+                    .filter(|&(_fact, &value)| value == self.1)
+                    .map(|(&fact, _value)| FactHr(fact));
+                f.debug_set().entries(iter).finish()
+            }
+        }
+        f.debug_struct("Situation")
+            .field("true", &Filtered(self, true))
+            .field("false", &Filtered(self, false))
             .finish()
     }
 }
@@ -281,9 +385,12 @@ impl Fact {
     pub const fn matches_pattern(self, fact_pattern: FactPattern) -> bool {
         self.bits & fact_pattern.mask == fact_pattern.fact.bits
     }
-    pub const fn with(mut self, fact_pattern: FactPattern) -> Self {
+    pub fn write(&mut self, fact_pattern: FactPattern) {
         self.bits &= !fact_pattern.mask;
         self.bits |= fact_pattern.fact.bits;
+    }
+    pub fn with(mut self, fact_pattern: FactPattern) -> Self {
+        self.write(fact_pattern);
         self
     }
     pub const fn read(self, bit_range: Range<u8>) -> u32 {
@@ -291,45 +398,84 @@ impl Fact {
     }
 }
 
+struct ReplState {
+    initial_situation: Situation,
+    agent_histories: EnumMap<Agent, EventGraph>,
+}
+impl ReplState {
+    fn handle_task(&mut self, task: Task) {
+        match task {
+            Task::AgentHistoryAdd { agent, graph } => self.agent_histories[agent].compose(&graph),
+            Task::AgentHistoryPrint { agent } => println!("{:#?}", &self.agent_histories[agent]),
+            Task::AgentDestinationsPrint { agent } => {
+                let destinations =
+                    self.agent_histories[agent].destinations(&self.initial_situation);
+                println!("{:#?}", &destinations);
+            }
+            Task::GlobalHistoryPrint => {
+                let global = self
+                    .agent_histories
+                    .values()
+                    .fold(EventGraph::default(), |global, local| global.composed(local));
+                println!("{:#?}", &global);
+            }
+            Task::GlobalDestinationsPrint => {
+                let global = self
+                    .agent_histories
+                    .values()
+                    .fold(EventGraph::default(), |global, local| global.composed(local));
+                let destinations = global.destinations(&self.initial_situation);
+                println!("{:#?}", &destinations);
+            }
+        }
+    }
+}
+
 pub fn repl() {
-    let initial_situation = Situation::default();
     let initial_history = EventGraph::default();
-    let mut agent_histories: EnumMap<Agent, EventGraph> = enum_map! {
-        Agent::Amy => initial_history.clone(),
-        Agent::Bob => initial_history.clone(),
-        Agent::Dan => initial_history.clone(),
+    let mut repl_state = ReplState {
+        initial_situation: Situation::default(),
+        agent_histories: enum_map! {
+            Agent::Amy => initial_history.clone(),
+            Agent::Bob => initial_history.clone(),
+            Agent::Dan => initial_history.clone(),
+        },
     };
+    let [a, b, c] = [
+        EventInstance { event: Event::SetOwner { owner: 0 }, index: 0 }, // weh
+        EventInstance { event: Event::SetOwner { owner: 1 }, index: 1 }, // weh
+        EventInstance { event: Event::SetOwner { owner: 2 }, index: 2 }, // weh
+    ];
+    repl_state.agent_histories[Agent::Amy].happen.extend([a, c]);
+    repl_state.agent_histories[Agent::Amy].before.extend([[a, c]]);
+
+    repl_state.agent_histories[Agent::Bob].happen.extend([a, b]);
+    repl_state.agent_histories[Agent::Bob].before.extend([[a, b]]);
     let stdin = std::io::stdin();
     let mut stdin_lock = stdin.lock();
 
     let mut buffer = String::new();
     loop {
-        use std::io::BufRead;
-        stdin_lock.read_line(&mut buffer).unwrap();
-        let got = ron::de::from_str::<Task>(&buffer);
-        println!("Got: {:#?}", &got);
+        print!("$ ");
+        std::io::Write::flush(&mut std::io::stdout()).unwrap();
+        std::io::BufRead::read_line(&mut stdin_lock, &mut buffer).unwrap();
+        let task_result = ron::de::from_str::<Task>(&buffer);
         buffer.clear();
-        match got {
-            Ok(Task::AgentHistoryAdd { agent, graph }) => agent_histories[agent].compose(&graph),
-            Ok(Task::AgentHistoryPrint { agent }) => println!("{:#?}", &agent_histories[agent]),
-            Ok(Task::AgentDestinationsPrint { agent }) => {
-                let destinations = agent_histories[agent].destinations(&initial_situation);
-                println!("{:#?}", &destinations);
-            }
-            Ok(Task::GlobalHistoryPrint) => {
-                let global = agent_histories
-                    .values()
-                    .fold(EventGraph::default(), |global, local| global.composed(local));
-                println!("{:#?}", &global);
-            }
-            Ok(Task::GlobalDestinationsPrint) => {
-                let global = agent_histories
-                    .values()
-                    .fold(EventGraph::default(), |global, local| global.composed(local));
-                let destinations = global.destinations(&initial_situation);
-                println!("{:#?}", &destinations);
-            }
-            Err(_) => {}
+        println!("task_result: {task_result:#?}");
+        if let Ok(task) = task_result {
+            repl_state.handle_task(task);
         }
     }
 }
+
+/*
+AgentHistoryAdd(agent:Amy,graph:EventGraph(happen:[EventInstance(event:SetOwner(owner:false),index:0),EventInstance(event:SetOwner(owner:false),index:1),EventInstance(event:SetOwner(owner:true),index:2)],before:[(EventInstance(event:SetOwner(owner:false),index:1),EventInstance(event:SetOwner(owner:true),index:2))]))
+AgentHistoryPrint(agent:Amy)
+AgentDestinationsPrint(agent:Amy)
+GlobalHistoryPrint
+GlobalDestinationsPrint
+
+    SetOwner { owner: bool },
+    BecomeFriends { a: bool, b: bool },
+
+*/
