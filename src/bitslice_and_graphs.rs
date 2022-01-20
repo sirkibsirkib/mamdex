@@ -17,19 +17,91 @@ const KIND_METAS: &'static [FactKindMeta] = &[
         ],
     },
 ];
-
 struct FactFieldMeta {
     field_name: &'static str,
     bits_len: u8,
 }
-
 #[derive(Clone, Copy)]
 struct FactKindMeta {
     kind_name: &'static str,
     field_metas: &'static [FactFieldMeta],
 }
-
 struct FactHr(Fact);
+struct HeapPermute<'a, T> {
+    arr: &'a mut [T],
+    i: usize,
+    n: usize,
+    c: Vec<usize>,
+}
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Hash, Serialize, Deserialize)]
+struct EventInstance {
+    event: Event,
+    index: u32,
+}
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Hash, Serialize, Deserialize)]
+enum Event {
+    SetOwner { owner: u32 },
+    BecomeFriends { a: u32, b: u32 },
+}
+struct ClosedOrder {
+    before: HashSet<[EventInstance; 2]>,
+}
+#[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct EventGraph {
+    happen: HashSet<EventInstance>,
+    before: HashSet<[EventInstance; 2]>,
+}
+#[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct PartialEventGraph {
+    depend: HashSet<EventInstance>,
+    event_graph: EventGraph,
+}
+#[derive(Clone, Default, Eq, PartialEq, Hash, Ord, PartialOrd)]
+struct Situation {
+    truth: BTreeMap<Fact, bool>,
+}
+#[derive(Debug, Default, Clone, Copy, Eq, PartialEq, Hash, Ord, PartialOrd)]
+struct Fact {
+    pub bits: u32,
+}
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
+struct FactPattern {
+    fact: Fact,
+    mask: u32,
+}
+fn pair_copy<A: Copy, B: Copy>((&a, &b): (&A, &B)) -> (A, B) {
+    (a, b)
+}
+#[derive(Enum, Copy, Clone, Debug, Serialize, Deserialize)]
+enum Agent {
+    Amy,
+    Bob,
+    Dan,
+}
+#[derive(Debug, Serialize, Deserialize)]
+enum Task {
+    AgentHistoryAdd { agent: Agent, graph: EventGraph },
+    AgentHistoryPrint { agent: Agent },
+    AgentDestinationsPrint { agent: Agent },
+    GlobalHistoryPrint,
+    GlobalDestinationsPrint,
+}
+trait Compose<T> {
+    fn compose(&mut self, rhs: &T);
+    fn composed(mut self, rhs: &T) -> Self
+    where
+        Self: Sized,
+    {
+        self.compose(rhs);
+        self
+    }
+}
+struct ReplState {
+    initial_situation: Situation,
+    agent_histories: EnumMap<Agent, EventGraph>,
+}
+
+//////////////////////////////////////////////////////
 
 impl Debug for FactHr {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
@@ -58,47 +130,6 @@ impl Fact {
         }
         fact
     }
-}
-
-// struct HrFact {
-//     kind_idx: u8,
-//     field_bits: Vec<u32>,
-// }
-// impl HrFact {
-//     fn pack(&self) -> Fact {
-//         let fkm = Self::KIND_METAS[self.kind_idx as usize];
-//         let mut fact = Fact::default();
-//         let mut offset = 0u8;
-//         let mut push_bits = |bits: u32, len: u8| {
-//             let new_offset = offset + len;
-//             fact.write(FactPattern::from_bit_slice(bits, offset..new_offset));
-//             offset = new_offset;
-//         };
-//         push_bits(self.kind_idx as u32, Self::KIND_LEN);
-//         for (&bits, field_meta) in self.field_bits.iter().zip(fkm.field_metas.iter()) {
-//             push_bits(bits, field_meta.bits_len);
-//         }
-//         fact
-//     }
-//     fn unpack(fact: Fact) -> Self {
-//         let kind_idx = fact.read(0..Self::KIND_LEN) as u8;
-//         let fkm = Self::KIND_METAS[kind_idx as usize];
-//         let mut offset = 0;
-//         let mut field_bits = vec![];
-//         for field_meta in fkm.field_metas.iter() {
-//             let new_offset = offset + field_meta.bits_len;
-//             field_bits.push(fact.read(offset..new_offset));
-//             offset = new_offset;
-//         }
-//         Self { kind_idx, field_bits }
-//     }
-// }
-
-struct HeapPermute<'a, T> {
-    arr: &'a mut [T],
-    i: usize,
-    n: usize,
-    c: Vec<usize>,
 }
 impl<'a, T> HeapPermute<'a, T> {
     /// https://en.wikipedia.org/wiki/Heap%27s_algorithm
@@ -129,108 +160,6 @@ impl<'a, T> HeapPermute<'a, T> {
         None
     }
 }
-
-#[derive(Debug, Clone, Copy, Eq, PartialEq, Hash, Serialize, Deserialize)]
-struct EventInstance {
-    event: Event,
-    index: u32,
-}
-
-#[derive(Debug, Clone, Copy, Eq, PartialEq, Hash, Serialize, Deserialize)]
-enum Event {
-    SetOwner { owner: u32 },
-    BecomeFriends { a: u32, b: u32 },
-}
-
-struct ClosedOrder {
-    before: HashSet<[EventInstance; 2]>,
-}
-
-#[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
-struct EventGraph {
-    happen: HashSet<EventInstance>,
-    before: HashSet<[EventInstance; 2]>,
-}
-#[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
-struct PartialEventGraph {
-    depend: HashSet<EventInstance>,
-    event_graph: EventGraph,
-}
-
-#[derive(Clone, Default, Eq, PartialEq, Hash, Ord, PartialOrd)]
-struct Situation {
-    truth: BTreeMap<Fact, bool>,
-}
-
-#[derive(Debug, Default, Clone, Copy, Eq, PartialEq, Hash, Ord, PartialOrd)]
-struct Fact {
-    pub bits: u32,
-}
-
-// #[derive(Debug)]
-// enum FactHr {
-//     Owner { owner: u32 },
-//     Friend { a: u32, b: u32 },
-// }
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
-struct FactPattern {
-    fact: Fact,
-    mask: u32,
-}
-
-fn pair_copy<A: Copy, B: Copy>((&a, &b): (&A, &B)) -> (A, B) {
-    (a, b)
-}
-
-#[derive(Enum, Copy, Clone, Debug, Serialize, Deserialize)]
-enum Agent {
-    Amy,
-    Bob,
-    Dan,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-enum Task {
-    AgentHistoryAdd { agent: Agent, graph: EventGraph },
-    AgentHistoryPrint { agent: Agent },
-    AgentDestinationsPrint { agent: Agent },
-    GlobalHistoryPrint,
-    GlobalDestinationsPrint,
-}
-trait Compose<T> {
-    fn compose(&mut self, rhs: &T);
-    fn composed(mut self, rhs: &T) -> Self
-    where
-        Self: Sized,
-    {
-        self.compose(rhs);
-        self
-    }
-}
-//////////////
-// impl Into<FactHr> for Fact {
-//     fn into(self) -> FactHr {
-//         match self.read(0..1) {
-//             0 => FactHr::Owner { owner: self.read(1..2) },
-//             1 => FactHr::Friend { a: self.read(1..2), b: self.read(2..3) },
-//             _ => unreachable!(),
-//         }
-//     }
-// }
-// impl Into<Fact> for FactHr {
-//     fn into(self) -> Fact {
-//         match self {
-//             FactHr::Owner { owner } => Fact::default()
-//                 .with(FactPattern::from_bit_slice(0b0, 0..1))
-//                 .with(FactPattern::from_bit_slice(owner, 1..2)),
-//             FactHr::Friend { a, b } => Fact::default()
-//                 .with(FactPattern::from_bit_slice(0b1, 0..1))
-//                 .with(FactPattern::from_bit_slice(a, 1..2))
-//                 .with(FactPattern::from_bit_slice(b, 2..3)),
-//         }
-//     }
-// }
 impl FactPattern {
     fn from_bit_slice(bits: u32, bit_range: Range<u8>) -> Self {
         let mask = bit_mask(range_copy(&bit_range));
@@ -282,7 +211,6 @@ impl Situation {
         Some(delta)
     }
 }
-
 impl ClosedOrder {
     fn respected_by(&self, arr: &[EventInstance]) -> bool {
         for window in arr.windows(2) {
@@ -397,11 +325,6 @@ impl Fact {
         (self.bits & bit_mask(range_copy(&bit_range))) >> bit_range.start
     }
 }
-
-struct ReplState {
-    initial_situation: Situation,
-    agent_histories: EnumMap<Agent, EventGraph>,
-}
 impl ReplState {
     fn handle_task(&mut self, task: Task) {
         match task {
@@ -430,6 +353,8 @@ impl ReplState {
         }
     }
 }
+
+//////////////////////////////////////////////////////
 
 pub fn repl() {
     let initial_history = EventGraph::default();
@@ -467,15 +392,12 @@ pub fn repl() {
         }
     }
 }
-
 /*
 AgentHistoryAdd(agent:Amy,graph:EventGraph(happen:[EventInstance(event:SetOwner(owner:false),index:0),EventInstance(event:SetOwner(owner:false),index:1),EventInstance(event:SetOwner(owner:true),index:2)],before:[(EventInstance(event:SetOwner(owner:false),index:1),EventInstance(event:SetOwner(owner:true),index:2))]))
 AgentHistoryPrint(agent:Amy)
 AgentDestinationsPrint(agent:Amy)
 GlobalHistoryPrint
 GlobalDestinationsPrint
-
     SetOwner { owner: bool },
     BecomeFriends { a: bool, b: bool },
-
 */
